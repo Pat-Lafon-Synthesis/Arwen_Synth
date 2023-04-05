@@ -1,0 +1,18 @@
+[package]
+name = "arwen_synth"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+fnv = "1.0.7"
+insta = "1.26.0"
+itertools = "0.10.5"
+rand = "0.8.5"
+program_synthesis_parser = { git = "https://github.com/Pat-Lafon-Synthesis/program_synthesis_parser.git" }
+ecta-rs = { git = "https://github.com/Pat-Lafon-Synthesis/ecta-rs.git" }
+z3 = { git = "https://github.com/Pat-Lafon/z3.rs.git", features = ["static-link-z3"] }
+
+[dev-dependencies]
+criterion = "0.4"

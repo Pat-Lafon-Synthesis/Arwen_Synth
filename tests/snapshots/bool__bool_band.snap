@@ -1,0 +1,5 @@
+---
+source: tests/bool.rs
+expression: prog.unwrap()
+---
+and(arg0,arg1)

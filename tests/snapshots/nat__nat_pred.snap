@@ -1,0 +1,5 @@
+---
+source: tests/nat.rs
+expression: prog.unwrap()
+---
+dec(arg0)
