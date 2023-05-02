@@ -18,7 +18,7 @@ macro_rules! make_test {
             let prog = synthesis(
                 synth_problem.sig.into(),
                 $($libs)*,
-                synth_problem.tests.tests,
+                &synth_problem.tests.tests,
                 1,
             );
             insta::assert_display_snapshot!(prog.unwrap());
@@ -33,5 +33,3 @@ make_test!(bool_bor, &bool_library());
 make_test!(bool_impl, &bool_library());
 make_test!(bool_neg, &bool_library());
 make_test!(bool_xor, &bool_library());
-
-

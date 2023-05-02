@@ -1,0 +1,6 @@
+---
+source: tests/list.rs
+assertion_line: 42
+expression: prog.unwrap()
+---
+hd(arg0)

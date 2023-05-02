@@ -1,8 +1,9 @@
 use std::rc::Rc;
 
 use arwen_synth::{
+    language::{Constant, InvalidProg, Operation, TestCase},
     synthesis,
-    types::{BaseType, Signature}, language::{Constant, InvalidProg, Operation, TestCase},
+    types::{BaseType, Signature},
 };
 
 pub fn main() {
@@ -65,6 +66,6 @@ pub fn main() {
         },
     ];
 
-    let prog = synthesis(s.into(), &l, tc, 4);
+    let prog = synthesis(s.into(), &l, &tc, 4);
     println!("{prog:?}")
 }

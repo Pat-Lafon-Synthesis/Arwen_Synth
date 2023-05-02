@@ -146,7 +146,7 @@ fn uncurry_arrow_type(t: Type) -> Vec<BaseType> {
 impl From<Type> for Signature<BaseType> {
     fn from(value: Type) -> Self {
         match &**value {
-            ActualType::Arrow(t1, t2) => {
+            ActualType::Arrow(..) => {
                 let mut typs = uncurry_arrow_type(value);
                 let output = typs.pop().unwrap();
                 Signature {
@@ -165,8 +165,8 @@ impl From<Type> for Signature<BaseType> {
 impl From<SynthProblem> for MySynthProblem {
     fn from(
         SynthProblem {
-            imports,
-            decls,
+            imports: _,
+            decls: _,
             synth_type,
             spec,
         }: SynthProblem,

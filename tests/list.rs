@@ -1,153 +1,62 @@
-use arwen_synth::{language::*, synthesis};
+use arwen_synth::{
+    language::*,
+    synthesis,
+    types::{BaseType, Signature},
+};
 
 mod libraries;
+use arwen_synth::parser_interface::parse;
 use libraries::*;
+use std::fs::File;
+use std::io::Read;
 
-#[test]
-fn list_append() {
-    let sig = Signature {
-        input: vec![BaseType::IntList, BaseType::IntList],
-        output: BaseType::IntList,
+macro_rules! make_test {
+    ($test_name:tt, $($libs:tt)*) => {
+        #[test]
+        fn $test_name() {
+            let mut file =
+                File::open(format!("tests/benchmarks/{}.mls", stringify!($test_name))).unwrap();
+            let mut buffer = String::new();
+            file.read_to_string(&mut buffer).unwrap();
+            let synth_problem = parse(buffer);
+
+            let prog = synthesis(
+                synth_problem.sig.into(),
+                $($libs)*,
+                &synth_problem.tests.tests,
+                1,
+            );
+            insta::assert_display_snapshot!(prog.unwrap());
+        }
     };
-
-    let tests = vec![
-        TestCase {
-            inputs: vec![Constant::IntList(Vec::new()), Constant::IntList(Vec::new())],
-            output: Constant::IntList(Vec::new()),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0, 1]), Constant::IntList(Vec::new())],
-            output: Constant::IntList(vec![0, 1]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(Vec::new()), Constant::IntList(vec![0, 1])],
-            output: Constant::IntList(vec![0, 1]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0]), Constant::IntList(vec![0, 1])],
-            output: Constant::IntList(vec![0, 0, 1]),
-        },
-    ];
-
-    let mut library = bool_library();
-    library.append(&mut list_library());
-
-    let prog = synthesis(sig.into(), &library, tests, 1);
-    assert!(prog.is_some());
-    println!("{}", prog.unwrap())
 }
 
-#[test]
-fn list_compress() {
-    let sig = Signature {
-        input: vec![BaseType::IntList],
-        output: BaseType::IntList,
-    };
-
-    let tests = vec![
-        TestCase {
-            inputs: vec![Constant::IntList(Vec::new())],
-            output: Constant::IntList(Vec::new()),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![1])],
-            output: Constant::IntList(vec![1]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0])],
-            output: Constant::IntList(vec![0]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0, 0])],
-            output: Constant::IntList(vec![0, 0]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![1, 1])],
-            output: Constant::IntList(vec![1, 1]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0, 2])],
-            output: Constant::IntList(vec![0, 2]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0, 0, 1])],
-            output: Constant::IntList(vec![0, 1]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![1, 1, 0])],
-            output: Constant::IntList(vec![1, 0]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0, 0, 1, 2])],
-            output: Constant::IntList(vec![0, 1, 2]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0, 0, 1, 2, 2])],
-            output: Constant::IntList(vec![0, 1, 2]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0, 2, 2])],
-            output: Constant::IntList(vec![0, 2]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0, 2, 2, 2])],
-            output: Constant::IntList(vec![0, 2]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0, 2, 2, 2, 1])],
-            output: Constant::IntList(vec![0, 2, 1]),
-        },
-    ];
-
-    let mut library = bool_library();
-    library.append(&mut list_library());
-    library.append(&mut int_library());
-
-    let prog = synthesis(sig.into(), &library, tests, 1);
-    assert!(prog.is_some());
-    println!("{}", prog.unwrap())
-}
-
-fn list_concat() {
-    // List of lists
-    todo!()
-}
-
-#[test]
-fn list_drop() {
-    let sig = Signature {
-        input: vec![BaseType::IntList, BaseType::Int],
-        output: BaseType::IntList,
-    };
-
-    let tests = vec![
-        TestCase {
-            inputs: vec![Constant::IntList(vec![]), Constant::Int(0)],
-            output: Constant::IntList(vec![]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![1]), Constant::Int(0)],
-            output: Constant::IntList(vec![1]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![1]), Constant::Int(1)],
-            output: Constant::IntList(vec![]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0, 1]), Constant::Int(1)],
-            output: Constant::IntList(vec![0]),
-        },
-        TestCase {
-            inputs: vec![Constant::IntList(vec![0, 1]), Constant::Int(2)],
-            output: Constant::IntList(vec![]),
-        },
-    ];
-
-    let mut library = int_library();
-    library.append(&mut list_library());
-
-
-    let prog = synthesis(sig.into(), &library, tests, 1);
-    assert!(prog.is_some());
-    println!("{}", prog.unwrap())
-}
+make_test!(list_append, &list_library());
+make_test!(list_compress, &list_library());
+make_test!(list_concat, &list_library());
+make_test!(list_drop, &list_library());
+make_test!(list_dropeven, &list_library());
+make_test!(list_even_parity, &list_library());
+make_test!(list_filter, &list_library());
+make_test!(list_fold, &list_library());
+make_test!(list_hd, &list_library());
+make_test!(list_inc, &list_library());
+make_test!(list_last, &list_library());
+make_test!(list_last2, &list_library());
+make_test!(list_length, &list_library());
+make_test!(list_make, &list_library());
+make_test!(list_map, &list_library());
+make_test!(list_nth, &list_library());
+make_test!(list_pairwise, &list_library());
+make_test!(list_range, &list_library());
+make_test!(list_rev_app, &list_library());
+make_test!(list_rev_fold, &list_library());
+make_test!(list_rev_snoc, &list_library());
+make_test!(list_rev_tailcall, &list_library());
+make_test!(list_snoc, &list_library());
+make_test!(list_sort_sorted_insert, &list_library());
+make_test!(list_sorted_insert, &list_library());
+make_test!(list_stutter, &list_library());
+make_test!(list_sum, &list_library());
+make_test!(list_take, &list_library());
+make_test!(list_tl, &list_library());

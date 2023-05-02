@@ -1,12 +1,23 @@
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::hash::Hash;
+use std::ops::Deref;
 use std::rc::Rc;
 
-use z3::ast::{Ast, Bool, Int};
-use z3::{Config, Context, Solver};
+use z3::ast::{Ast, Bool, Datatype, Dynamic, Int};
+use z3::{
+    Config, Context, DatatypeAccessor, DatatypeBuilder, DatatypeSort, FuncDecl, Solver, Sort,
+};
 
-use crate::language::Constant;
+use crate::language::{Constant, InvalidProg};
+
+pub trait TypeSystemBounds:
+    PartialEq + Eq + Hash + Clone + Debug + PartialOrd + Ord + From<Constant>
+{
+}
+
+impl TypeSystemBounds for BaseType {}
+impl TypeSystemBounds for RefinementType {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub enum BaseType {
@@ -16,8 +27,23 @@ pub enum BaseType {
     IntTree,
 }
 
-impl From<&Constant> for BaseType {
-    fn from(c: &Constant) -> Self {
+impl Display for BaseType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                BaseType::Int => "int",
+                BaseType::Bool => "bool",
+                BaseType::IntList => "list",
+                BaseType::IntTree => "tree",
+            }
+        )
+    }
+}
+
+impl From<Constant> for BaseType {
+    fn from(c: Constant) -> Self {
         match c {
             Constant::Int(_) => BaseType::Int,
             Constant::Bool(_) => BaseType::Bool,
@@ -28,32 +54,60 @@ impl From<&Constant> for BaseType {
 }
 
 #[derive(Clone)]
-pub struct PredicateFunction {
+pub struct PredicateFunction<T> {
     sym: String,
-    fun: Rc<dyn Fn(Vec<Constant>) -> Constant>,
+    sig: Signature<T>,
+    fun: Rc<dyn Fn(Vec<Constant>) -> Result<Constant, InvalidProg>>,
 }
 
-impl FnOnce<(Vec<Constant>,)> for PredicateFunction {
+impl BaseType {
+    pub fn into_z3_sort<'ctx>(&self, ctx: &'ctx Context) -> Sort<'ctx> {
+        match self {
+            BaseType::Int => Sort::int(ctx),
+            BaseType::Bool => Sort::bool(ctx),
+            _ => panic!("Not implemented"),
+        }
+    }
+}
+
+impl PredicateFunction<BaseType> {
+    pub fn into_z3_decl<'ctx>(&self, ctx: &'ctx Context) -> FuncDecl<'ctx> {
+        let args = self
+            .sig
+            .input
+            .iter()
+            .map(|ty| ty.into_z3_sort(ctx))
+            .collect::<Vec<_>>();
+        FuncDecl::new(
+            ctx,
+            self.sym.clone(),
+            &args.iter().collect::<Vec<_>>(),
+            &self.sig.output.into_z3_sort(ctx),
+        )
+    }
+}
+
+impl<T> FnOnce<(Vec<Constant>,)> for PredicateFunction<T> {
     type Output = Constant;
 
     extern "rust-call" fn call_once(self, args: (Vec<Constant>,)) -> Self::Output {
-        (self.fun)(args.0)
+        (self.fun)(args.0).unwrap()
     }
 }
 
-impl FnMut<(Vec<Constant>,)> for PredicateFunction {
+impl<T> FnMut<(Vec<Constant>,)> for PredicateFunction<T> {
     extern "rust-call" fn call_mut(&mut self, args: (Vec<Constant>,)) -> Self::Output {
-        (self.fun)(args.0)
+        (self.fun)(args.0).unwrap()
     }
 }
 
-impl Fn<(Vec<Constant>,)> for PredicateFunction {
+impl<T> Fn<(Vec<Constant>,)> for PredicateFunction<T> {
     extern "rust-call" fn call(&self, args: (Vec<Constant>,)) -> Self::Output {
-        (self.fun)(args.0)
+        (self.fun)(args.0).unwrap()
     }
 }
 
-impl Debug for PredicateFunction {
+impl<T> Debug for PredicateFunction<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PredicateFunction")
             .field("sym", &self.sym)
@@ -61,9 +115,51 @@ impl Debug for PredicateFunction {
     }
 }
 
-impl Hash for PredicateFunction {
+impl<T> Hash for PredicateFunction<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.sym.hash(state);
+    }
+}
+
+pub struct Z3Solver<'ctx> {
+    pub ctx: &'ctx Context,
+    pub solver: Solver<'ctx>,
+    pub int_sort: Sort<'ctx>,
+    pub bool_sort: Sort<'ctx>,
+    pub int_list_sort: DatatypeSort<'ctx>,
+    /* pub int_tree_sort: Sort<'ctx>, */
+}
+
+impl<'ctx> Z3Solver<'ctx> {
+    pub fn new(ctx: &'ctx Context) -> Self {
+        let solver = Solver::new(ctx);
+        let int_sort = Sort::int(ctx);
+        let bool_sort = Sort::bool(ctx);
+        let list_sort = DatatypeBuilder::new(&ctx, "ListInt")
+            .variant("Nil", vec![])
+            .variant(
+                "Cons",
+                vec![
+                    ("head", DatatypeAccessor::Sort(Sort::int(&ctx))),
+                    ("tail", DatatypeAccessor::Datatype("ListInt".into())),
+                ],
+            )
+            .finish();
+        Z3Solver {
+            ctx,
+            solver,
+            int_sort,
+            bool_sort,
+            int_list_sort: list_sort,
+        }
+    }
+}
+
+impl<'ctx> Deref for Z3Solver<'ctx> {
+    type Target = Solver<'ctx>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.solver
     }
 }
 
@@ -71,7 +167,7 @@ impl Hash for PredicateFunction {
 #[derive(Debug, Clone)]
 pub enum PredicateExpression {
     Const(Constant),                                          // -1, 0, 1
-    Var(String),                                              // x, y, z
+    Var(String, RefinementType),                              // x, y, z
     Plus(Box<PredicateExpression>, Box<PredicateExpression>), // e + e
     Sub(Box<PredicateExpression>, Box<PredicateExpression>),  // e - e
     Mul(Box<PredicateExpression>, Box<PredicateExpression>),  // e * e
@@ -80,14 +176,18 @@ pub enum PredicateExpression {
         Box<PredicateExpression>,
         Box<PredicateExpression>,
     ), // If p then e else e
-    Func(PredicateFunction, Vec<PredicateExpression>),        // Uninterpred Function
+    Func(PredicateFunction<BaseType>, Vec<PredicateExpression>), // Uninterpred Function
 }
 
 impl PredicateExpression {
     pub fn eval(&self, map: &HashMap<String, Constant>) -> Constant {
         match self {
             PredicateExpression::Const(c) => c.clone(),
-            PredicateExpression::Var(v) => map.get(v).unwrap().clone(),
+            PredicateExpression::Var(v, ty) => {
+                let c = map.get(v).unwrap().clone();
+                assert_eq!(Into::<BaseType>::into(c.clone()), ty.ty);
+                c
+            }
             PredicateExpression::Plus(e1, e2) => match (e1.eval(map), e2.eval(map)) {
                 (Constant::Int(i1), Constant::Int(i2)) => Constant::Int(i1 + i2),
                 (..) => panic!(),
@@ -111,18 +211,155 @@ impl PredicateExpression {
         }
     }
 
-    pub fn into_z3_int<'ctx>(&self, ctx: &'ctx Context) -> Int<'ctx> {
+    pub fn into_z3_int<'ctx>(&self, solver: &'ctx Z3Solver) -> Int<'ctx> {
+        let ctx = solver.ctx;
         match self {
             PredicateExpression::Const(Constant::Int(i)) => Int::from_i64(ctx, *i),
-            PredicateExpression::Var(name) => Int::new_const(ctx, name.to_string()),
-            PredicateExpression::Const(..) => panic!("Not an Int?"),
-            PredicateExpression::Plus(p1, p2) => p1.into_z3_int(ctx) + p2.into_z3_int(ctx),
-            PredicateExpression::Sub(p1, p2) => p1.into_z3_int(ctx) - p2.into_z3_int(ctx),
-            PredicateExpression::Mul(p1, p2) => p1.into_z3_int(ctx) * p2.into_z3_int(ctx),
+            PredicateExpression::Var(name, ty) => {
+                assert_eq!(ty.ty, BaseType::Int);
+                let i = Int::new_const(ctx, name.to_string());
+                solver.assert(&ty.p.into_z3(solver));
+                i
+            }
+            PredicateExpression::Const(c) => panic!("Not an Int? : {c}"),
+            PredicateExpression::Plus(p1, p2) => p1.into_z3_int(solver) + p2.into_z3_int(solver),
+            PredicateExpression::Sub(p1, p2) => p1.into_z3_int(solver) - p2.into_z3_int(solver),
+            PredicateExpression::Mul(p1, p2) => p1.into_z3_int(solver) * p2.into_z3_int(solver),
             PredicateExpression::ITE(e, p1, p2) => e
-                .into_z3(ctx)
-                .ite(&p1.into_z3_int(ctx), &p2.into_z3_int(ctx)),
+                .into_z3(solver)
+                .ite(&p1.into_z3_int(solver), &p2.into_z3_int(solver)),
+            PredicateExpression::Func(f, args) => {
+                let args = args
+                    .iter()
+                    .zip(f.sig.input.iter())
+                    .map(|(e, t)| match t {
+                        BaseType::Int => e.into_z3_int(solver).into(),
+                        BaseType::Bool => e.into_z3_bool(solver).into(),
+                        BaseType::IntList => todo!(),
+                        BaseType::IntTree => todo!(),
+                    })
+                    .collect::<Vec<Dynamic<'ctx>>>();
+                f.into_z3_decl(ctx)
+                    .apply(
+                        args.iter()
+                            .map(|a| a as &dyn Ast<'ctx>)
+                            .collect::<Vec<_>>()
+                            .as_slice(),
+                    )
+                    .as_int()
+                    .unwrap()
+            }
+        }
+    }
+
+    pub fn into_z3_bool<'ctx>(&self, solver: &'ctx Z3Solver) -> Bool<'ctx> {
+        let ctx = solver.ctx;
+        match self {
+            PredicateExpression::Const(Constant::Bool(b)) => Bool::from_bool(ctx, *b),
+            PredicateExpression::Var(name, ty) => {
+                assert_eq!(ty.ty, BaseType::Bool);
+                let b = Bool::new_const(ctx, name.to_string());
+                solver.assert(&ty.p.into_z3(solver));
+                b
+            }
+            PredicateExpression::Const(c) => panic!("Not a Bool? : {c}"),
+            PredicateExpression::Plus(..)
+            | PredicateExpression::Sub(..)
+            | PredicateExpression::Mul(..) => {
+                panic!("Not a Bool? : {self:?}")
+            }
+            PredicateExpression::ITE(e, p1, p2) => e
+                .into_z3(solver)
+                .ite(&p1.into_z3_bool(solver), &p2.into_z3_bool(solver)),
+            PredicateExpression::Func(f, args) => {
+                let args = args
+                    .iter()
+                    .zip(f.sig.input.iter())
+                    .map(|(e, t)| match t {
+                        BaseType::Int => e.into_z3_int(solver).into(),
+                        BaseType::Bool => e.into_z3_bool(solver).into(),
+                        BaseType::IntList => e.into_z3_int_list(solver),
+                        BaseType::IntTree => todo!(),
+                    })
+                    .collect::<Vec<Dynamic<'ctx>>>();
+                f.into_z3_decl(ctx)
+                    .apply(
+                        args.iter()
+                            .map(|a| a as &dyn Ast<'ctx>)
+                            .collect::<Vec<_>>()
+                            .as_slice(),
+                    )
+                    .as_bool()
+                    .unwrap()
+            }
+        }
+    }
+
+    pub fn into_z3_int_list<'ctx>(&self, solver: &'ctx Z3Solver) -> Dynamic<'ctx> {
+        match self {
+            PredicateExpression::Const(Constant::IntList(_)) => todo!(),
+            PredicateExpression::Var(name, ty) => {
+                assert_eq!(ty.ty, BaseType::IntList);
+                let l = Datatype::new_const(solver.ctx, name.as_str(), &solver.int_list_sort.sort);
+                solver.assert(&ty.p.into_z3(solver));
+                l.into()
+            }
+            PredicateExpression::Const(_)
+            | PredicateExpression::Plus(..)
+            | PredicateExpression::Sub(..)
+            | PredicateExpression::Mul(..) => panic!("Not a list? : {self:?}"),
+            PredicateExpression::ITE(b, t, e) => {
+                assert!(t.is_int_list());
+                assert!(e.is_int_list());
+                b.into_z3(solver)
+                    .ite(&t.into_z3_int_list(solver), &e.into_z3_int_list(solver))
+            }
             PredicateExpression::Func(..) => todo!(),
+        }
+    }
+
+    pub fn is_bool(&self) -> bool {
+        match self {
+            PredicateExpression::Const(Constant::Bool(_)) => true,
+            PredicateExpression::Var(_, ty) => ty.ty == BaseType::Bool,
+            PredicateExpression::Const(_)
+            | PredicateExpression::Plus(..)
+            | PredicateExpression::Sub(..)
+            | PredicateExpression::Mul(..) => false,
+            PredicateExpression::ITE(_, p1, p2) => p1.is_bool() && p2.is_bool(),
+            PredicateExpression::Func(PredicateFunction { sig, .. }, _) => {
+                sig.output == BaseType::Bool
+            }
+        }
+    }
+
+    pub fn is_int(&self) -> bool {
+        match self {
+            PredicateExpression::Const(Constant::Int(_)) => true,
+            PredicateExpression::Var(_, ty) => ty.ty == BaseType::Int,
+            PredicateExpression::Const(_) => false,
+            PredicateExpression::Plus(..)
+            | PredicateExpression::Sub(..)
+            | PredicateExpression::Mul(..) => true,
+            PredicateExpression::ITE(_, p1, p2) => p1.is_int() && p2.is_int(),
+            PredicateExpression::Func(PredicateFunction { sig, .. }, _) => {
+                sig.output == BaseType::Int
+            }
+        }
+    }
+
+    pub fn is_int_list(&self) -> bool {
+        match self {
+            PredicateExpression::Const(Constant::IntList(_)) => true,
+            PredicateExpression::Var(_, ty) => ty.ty == BaseType::IntList,
+            PredicateExpression::Const(_) => false,
+            PredicateExpression::Plus(..)
+            | PredicateExpression::Sub(..)
+            | PredicateExpression::Mul(..) => false,
+            PredicateExpression::ITE(_, p1, p2) => p1.is_int_list() && p2.is_int_list(),
+            PredicateExpression::Func(PredicateFunction { sig, .. }, _) => {
+                sig.output == BaseType::IntList
+            }
         }
     }
 }
@@ -157,15 +394,19 @@ impl Predicate {
         }
     }
 
-    pub fn into_z3<'ctx>(&self, ctx: &'ctx Context) -> Bool<'ctx> {
+    pub fn into_z3<'ctx>(&self, solver: &'ctx Z3Solver) -> Bool<'ctx> {
+        let ctx = solver.get_context();
         match self {
             Predicate::Bool(b) => Bool::from_bool(ctx, *b),
-            Predicate::Equal(p1, p2) => p1.into_z3_int(ctx)._eq(&p2.into_z3_int(ctx)),
-            Predicate::Less(p1, p2) => p1.into_z3_int(ctx).lt(&p2.into_z3_int(ctx)),
-            Predicate::Conj(e1, e2) => Bool::and(ctx, &[&e1.into_z3(ctx), &e2.into_z3(ctx)]),
-            Predicate::Disj(e1, e2) => Bool::or(ctx, &[&e1.into_z3(ctx), &e2.into_z3(ctx)]),
-            Predicate::Impl(b1, b2) => b1.into_z3(ctx).implies(&b2.into_z3(ctx)),
-            Predicate::Neg(b) => b.into_z3(ctx).not(),
+            Predicate::Equal(p1, p2) if p1.is_bool() || p2.is_bool() => {
+                p1.into_z3_bool(solver)._eq(&p2.into_z3_bool(solver))
+            }
+            Predicate::Equal(p1, p2) => p1.into_z3_int(solver)._eq(&p2.into_z3_int(solver)),
+            Predicate::Less(p1, p2) => p1.into_z3_int(solver).lt(&p2.into_z3_int(solver)),
+            Predicate::Conj(e1, e2) => Bool::and(ctx, &[&e1.into_z3(solver), &e2.into_z3(solver)]),
+            Predicate::Disj(e1, e2) => Bool::or(ctx, &[&e1.into_z3(solver), &e2.into_z3(solver)]),
+            Predicate::Impl(b1, b2) => b1.into_z3(solver).implies(&b2.into_z3(solver)),
+            Predicate::Neg(b) => b.into_z3(solver).not(),
         }
     }
 }
@@ -177,8 +418,7 @@ pub struct RefinementType {
 }
 
 impl RefinementType {
-    fn prove(ctx: &Context, claim: &Bool) -> bool {
-        let solver = Solver::new(ctx);
+    fn prove(solver: &Solver, claim: &Bool) -> bool {
         solver.assert(&claim.not());
         match solver.check() {
             z3::SatResult::Unsat => {
@@ -195,7 +435,7 @@ impl RefinementType {
             }
         }
     }
-    // Z3_SYS_Z3_HEADER="/usr/local/bin/z3.h"
+
     pub fn is_sub_type(
         &self,
         RefinementType {
@@ -211,13 +451,76 @@ impl RefinementType {
             return false;
         }
         let cfg = Config::new();
-        let ctx = Context::new(&cfg);
+        let ctx = &Context::new(&cfg);
+        let solver = Z3Solver::new(ctx);
 
         // goal is to say that something implies something else
         // "Prove" by doing the negation
 
-        let x = RefinementType::prove(&ctx, &sub_p.into_z3(&ctx).implies(&super_p.into_z3(&ctx)));
+        let x = RefinementType::prove(
+            &solver,
+            &sub_p.into_z3(&solver).implies(&super_p.into_z3(&solver)),
+        );
         x
+    }
+}
+
+impl From<Constant> for RefinementType {
+    fn from(value: Constant) -> Self {
+        match value {
+            Constant::Int(i) => RefinementType {
+                ty: BaseType::Int,
+                p: Predicate::Equal(
+                    Box::new(PredicateExpression::Const(Constant::Int(i))),
+                    Box::new(PredicateExpression::Var(
+                        "v".to_string(),
+                        RefinementType {
+                            ty: BaseType::Int,
+                            p: Predicate::Bool(true),
+                        },
+                    )),
+                ),
+            },
+            Constant::Bool(b) => RefinementType {
+                ty: BaseType::Bool,
+                p: Predicate::Equal(
+                    Box::new(PredicateExpression::Const(Constant::Bool(b))),
+                    Box::new(PredicateExpression::Var(
+                        "v".to_string(),
+                        RefinementType {
+                            ty: BaseType::Bool,
+                            p: Predicate::Bool(true),
+                        },
+                    )),
+                ),
+            },
+            Constant::IntList(l) => RefinementType {
+                ty: BaseType::IntList,
+                p: Predicate::Equal(
+                    Box::new(PredicateExpression::Const(Constant::IntList(l))),
+                    Box::new(PredicateExpression::Var(
+                        "v".to_string(),
+                        RefinementType {
+                            ty: BaseType::IntList,
+                            p: Predicate::Bool(true),
+                        },
+                    )),
+                ),
+            },
+            Constant::IntTree(t) => RefinementType {
+                ty: BaseType::IntTree,
+                p: Predicate::Equal(
+                    Box::new(PredicateExpression::Const(Constant::IntTree(t))),
+                    Box::new(PredicateExpression::Var(
+                        "v".to_string(),
+                        RefinementType {
+                            ty: BaseType::IntTree,
+                            p: Predicate::Bool(true),
+                        },
+                    )),
+                ),
+            },
+        }
     }
 }
 
@@ -337,18 +640,155 @@ mod tests {
         let ref1 = RefinementType {
             ty: BaseType::Int,
             p: Predicate::Less(
-                PredicateExpression::Var("x".to_string()).into(),
+                PredicateExpression::Var("v".to_string(), BaseType::Int.into()).into(),
                 PredicateExpression::Const(Constant::Int(5)).into(),
             ),
         };
         let ref2 = RefinementType {
             ty: BaseType::Int,
             p: Predicate::Less(
-                PredicateExpression::Var("x".to_string()).into(),
+                PredicateExpression::Var("v".to_string(), BaseType::Int.into()).into(),
                 PredicateExpression::Const(Constant::Int(6)).into(),
             ),
         };
         assert!(ref1.is_sub_type(&ref2));
         assert!(!ref2.is_sub_type(&ref1));
+    }
+
+    #[test]
+    fn mixed_pred_subtype() {
+        let ref1 = RefinementType {
+            ty: BaseType::Int,
+            p: Predicate::Bool(true),
+        };
+        let ref2 = RefinementType {
+            ty: BaseType::Int,
+            p: Predicate::Equal(
+                PredicateExpression::Var("v".to_string(), BaseType::Int.into()).into(),
+                PredicateExpression::Const(Constant::Int(0)).into(),
+            ),
+        };
+        assert!(!ref1.is_sub_type(&ref2));
+        assert!(ref2.is_sub_type(&ref1));
+    }
+
+    #[test]
+    fn zero_rules_subtype() {
+        let ref1 = RefinementType {
+            ty: BaseType::Int,
+            p: Predicate::Equal(
+                PredicateExpression::Var("v".to_string(), BaseType::Int.into()).into(),
+                PredicateExpression::Const(Constant::Int(0)).into(),
+            ),
+        };
+        let ref2 = RefinementType {
+            ty: BaseType::Int,
+            p: Predicate::Less(
+                PredicateExpression::Var("v".to_string(), BaseType::Int.into()).into(),
+                PredicateExpression::Const(Constant::Int(100)).into(),
+            ),
+        };
+        let ref3 = RefinementType {
+            ty: BaseType::Int,
+            p: Predicate::Neg(
+                Predicate::Less(
+                    PredicateExpression::Const(Constant::Int(0)).into(),
+                    PredicateExpression::Var("v".to_string(), BaseType::Int.into()).into(),
+                )
+                .into(),
+            ),
+        };
+        assert!(ref1.is_sub_type(&ref2));
+        assert!(ref1.is_sub_type(&ref3));
+        assert!(!ref2.is_sub_type(&ref1));
+        assert!(!ref3.is_sub_type(&ref1));
+    }
+
+    #[test]
+    fn uninterpreted_non_zero_subtype() {
+        let is_zero = Rc::new(|args: Vec<Constant>| match args.get(1).unwrap() {
+            Constant::Int(0) => Ok(Constant::Bool(true)),
+            Constant::Int(_) => Ok(Constant::Bool(false)),
+            _ => panic!(),
+        });
+
+        let ref1 = RefinementType {
+            ty: BaseType::Int,
+            p: Predicate::Equal(
+                PredicateExpression::Const(Constant::Bool(true)).into(),
+                PredicateExpression::Func(
+                    PredicateFunction {
+                        sym: "is_zero".to_string(),
+                        fun: is_zero.clone(),
+                        sig: Signature {
+                            input: vec![BaseType::Int],
+                            output: BaseType::Bool,
+                        },
+                    },
+                    vec![PredicateExpression::Var(
+                        "v".to_string(),
+                        BaseType::Int.into(),
+                    )],
+                )
+                .into(),
+            ),
+        };
+
+        let ref_1 = RefinementType {
+            ty: BaseType::Int,
+            p: Predicate::Equal(
+                PredicateExpression::Const(Constant::Bool(true)).into(),
+                PredicateExpression::Func(
+                    PredicateFunction {
+                        sym: "is_zero".to_string(),
+                        fun: is_zero.clone(),
+                        sig: Signature {
+                            input: vec![BaseType::Int],
+                            output: BaseType::Bool,
+                        },
+                    },
+                    vec![PredicateExpression::Var(
+                        "v".to_string(),
+                        BaseType::Int.into(),
+                    )],
+                )
+                .into(),
+            ),
+        };
+
+        let ref2 = RefinementType {
+            ty: BaseType::Int,
+            p: Predicate::Bool(true),
+        };
+
+        let ref3 = RefinementType {
+            ty: BaseType::Int,
+            p: Predicate::Equal(
+                PredicateExpression::Const(Constant::Bool(true)).into(),
+                PredicateExpression::Func(
+                    PredicateFunction {
+                        sym: "is_zero".to_string(),
+                        fun: is_zero,
+                        sig: Signature {
+                            input: vec![BaseType::Int],
+                            output: BaseType::Bool,
+                        },
+                    },
+                    vec![PredicateExpression::Var(
+                        "r".to_string(),
+                        BaseType::Int.into(),
+                    )],
+                )
+                .into(),
+            ),
+        };
+
+        assert!(ref1.is_sub_type(&ref1));
+        assert!(ref1.is_sub_type(&ref_1));
+        assert!(ref_1.is_sub_type(&ref1));
+        assert!(ref1.is_sub_type(&ref2));
+        assert!(!ref2.is_sub_type(&ref1));
+        assert!(!ref1.is_sub_type(&ref3));
+        assert!(!ref3.is_sub_type(&ref1));
     }
 }

@@ -1,8 +1,11 @@
 use std::rc::Rc;
 
-use arwen_synth::language::*;
+use arwen_synth::{
+    language::*,
+    types::{BaseType, Signature},
+};
 
-pub fn bool_library() -> Vec<Operation> {
+pub fn bool_library() -> Vec<Operation<BaseType>> {
     vec![
         Operation {
             name: "true".to_string(),
@@ -56,7 +59,7 @@ pub fn bool_library() -> Vec<Operation> {
     ]
 }
 
-pub fn nat_library() -> Vec<Operation> {
+pub fn nat_library() -> Vec<Operation<BaseType>> {
     vec![
         Operation {
             name: "is_zero".to_string(),
@@ -128,7 +131,7 @@ pub fn nat_library() -> Vec<Operation> {
     ]
 }
 
-pub fn list_library() -> Vec<Operation> {
+pub fn list_library() -> Vec<Operation<BaseType>> {
     vec![
         Operation {
             name: "nil".to_string(),
@@ -159,7 +162,7 @@ pub fn list_library() -> Vec<Operation> {
                 input: vec![BaseType::IntList],
                 output: BaseType::Bool,
             },
-            code: Rc::new(|args| match args.get(1).unwrap() {
+            code: Rc::new(|args| match args.get(0).unwrap() {
                 Constant::IntList(l) => Ok(Constant::Bool(l.is_empty())),
                 _ => panic!(),
             }),
@@ -170,7 +173,7 @@ pub fn list_library() -> Vec<Operation> {
                 input: vec![BaseType::IntList],
                 output: BaseType::Bool,
             },
-            code: Rc::new(|args| match args.get(1).unwrap() {
+            code: Rc::new(|args| match args.get(0).unwrap() {
                 Constant::IntList(l) => Ok(Constant::Bool(!l.is_empty())),
                 _ => panic!(),
             }),
@@ -181,7 +184,7 @@ pub fn list_library() -> Vec<Operation> {
                 input: vec![BaseType::IntList],
                 output: BaseType::Int,
             },
-            code: Rc::new(|args| match args.get(1).unwrap() {
+            code: Rc::new(|args| match args.get(0).unwrap() {
                 Constant::IntList(l) if l.is_empty() => Err(InvalidProg {}),
                 Constant::IntList(l) => Ok(Constant::Int(*l.last().unwrap())),
                 _ => panic!(),
@@ -193,7 +196,7 @@ pub fn list_library() -> Vec<Operation> {
                 input: vec![BaseType::IntList],
                 output: BaseType::IntList,
             },
-            code: Rc::new(|args| match args.get(1).unwrap() {
+            code: Rc::new(|args| match args.get(0).unwrap() {
                 Constant::IntList(l) if l.is_empty() => Err(InvalidProg {}),
                 Constant::IntList(l) => {
                     let mut x = l.clone();
