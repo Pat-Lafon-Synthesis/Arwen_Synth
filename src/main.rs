@@ -66,6 +66,6 @@ pub fn main() {
         },
     ];
 
-    let prog = synthesis(s.into(), &l, &tc, 4);
+    let prog = synthesis(s, &l, tc.into(), 4);
     println!("{prog:?}")
 }

@@ -1,8 +1,4 @@
-use arwen_synth::{
-    language::*,
-    synthesis,
-    types::{BaseType, Signature},
-};
+use arwen_synth::synthesis;
 
 mod libraries;
 use arwen_synth::parser_interface::parse;
@@ -23,7 +19,7 @@ macro_rules! make_test {
             let prog = synthesis(
                 synth_problem.sig.into(),
                 $($libs)*,
-                &synth_problem.tests.tests,
+                synth_problem.tests.tests.into(),
                 1,
             );
             insta::assert_display_snapshot!(prog.unwrap());

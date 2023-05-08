@@ -6,7 +6,9 @@ use std::rc::Rc;
 
 use itertools::Itertools;
 
-use crate::types::{BaseType, RefinementType, Signature, TypeSystemBounds};
+use crate::types::{Signature, TypeSystemBounds};
+
+use super::TestCase;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Tree<T: Display> {
@@ -258,181 +260,7 @@ impl<T: TypeSystemBounds> Display for ProgramNode<T> {
     }
 }
 
-type Environment<T> = HashMap<Variable<T>, Constant>;
-
-#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
-pub struct TestCase {
-    pub inputs: Vec<Constant>,
-    pub output: Constant,
-}
-
-impl TestCase {
-    fn into_env<T: TypeSystemBounds>(&self) -> Environment<T> {
-        let TestCase { inputs, .. } = self;
-        inputs
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                (
-                    Variable {
-                        name: format!("arg{i:?}"),
-                        ty: Into::<T>::into(c.clone()).into(),
-                    },
-                    c.clone(),
-                )
-            })
-            .collect()
-    }
-}
-
-impl Display for TestCase {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "({}) -> {}",
-            self.inputs.iter().map(ToString::to_string).join(","),
-            self.output
-        )
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Sketch<T: TypeSystemBounds> {
-    Hole(T),
-    Constant(Constant),
-    Variable(Variable<T>, T),
-    Operation(Operation<T>, Vec<Sketch<T>>),
-    If(Box<Sketch<T>>, Box<Sketch<T>>, Box<Sketch<T>>),
-}
-
-impl From<&Sketch<BaseType>> for BaseType {
-    fn from(s: &Sketch<BaseType>) -> Self {
-        match s {
-            Sketch::Hole(t) => t.clone(),
-            Sketch::Constant(c) => c.clone().into(),
-            Sketch::Variable(_, t) => t.clone(),
-            Sketch::Operation(o, _) => o.sig.output,
-            Sketch::If(_, t1, t2) => {
-                let t: BaseType = (&**t1).into();
-                assert!(t == (&**t2).into());
-                t
-            }
-        }
-    }
-}
-
-impl From<&Sketch<RefinementType>> for RefinementType {
-    fn from(s: &Sketch<RefinementType>) -> Self {
-        match s {
-            Sketch::Hole(t) => t.clone(),
-            Sketch::Constant(c) => c.clone().into(),
-            Sketch::Variable(_, t) => t.clone(),
-            Sketch::Operation(o, _) => o.sig.output.clone(),
-            Sketch::If(_, t1, t2) => {
-                let t: RefinementType = (&**t1).into();
-                assert!(t == (&**t2).into());
-                t
-            }
-        }
-    }
-}
-
-impl<T: TypeSystemBounds> TryFrom<Sketch<T>> for Program<T> {
-    type Error = ();
-
-    fn try_from(value: Sketch<T>) -> Result<Self, Self::Error> {
-        match value {
-            Sketch::Hole(_) => Err(()),
-            Sketch::Constant(c) => Ok(Program {
-                node: ProgramNode::Constant(c),
-                args: Vec::new(),
-            }),
-            Sketch::Variable(v, t) => Ok(Program {
-                node: ProgramNode::Variable(v, t),
-                args: Vec::new(),
-            }),
-            Sketch::Operation(o, args) => Ok(Program {
-                node: ProgramNode::Operation(o),
-                args: args.into_iter().try_fold(Vec::new(), |mut acc, a| {
-                    acc.push(a.try_into()?);
-                    Ok(acc)
-                })?,
-            }),
-            Sketch::If(b, s1, s2) => Ok(Program {
-                node: ProgramNode::If,
-                args: vec![(*b).try_into()?, (*s1).try_into()?, (*s2).try_into()?],
-            }),
-        }
-    }
-}
-
-impl<T: TypeSystemBounds> Display for Sketch<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            Sketch::Hole(t) => write!(f, "{{}} : {t:?}"),
-            Self::Constant(c) => write!(f, "{c}"),
-            Self::Variable(v, _) => write!(f, "{v}"),
-            Self::Operation(o, args) => {
-                write!(f, "{o}({})", args.iter().map(ToString::to_string).join(","))
-            }
-            Self::If(cond, s1, s2) => write!(f, "if ({cond}) {{{s1}}} else {{{s2}}}"),
-        }
-    }
-}
-
-impl<T: TypeSystemBounds> PartialOrd for Sketch<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(match (self, other) {
-            // Handle equal cases first
-            (Sketch::Hole(_), Sketch::Hole(_))
-            | (Sketch::Constant(_), Sketch::Constant(_))
-            | (Sketch::Variable(..), Sketch::Variable(..)) => Ordering::Equal,
-
-            // Equal program nodes, but maybe not equal sketches
-            (Sketch::Operation(o1, args1), Sketch::Operation(o2, args2)) => {
-                assert!(o1 == o2); // Do I need to handle something special when the operations are different? Maybe order operations with fewer arguments first? Maybe choose more specific types first
-                if args1.is_empty() && args2.is_empty() {
-                    Ordering::Equal
-                } else {
-                    args1[0].partial_cmp(&args2[0]).unwrap()
-                }
-            }
-            (Sketch::If(c1, t1, f1), Sketch::If(c2, t2, f2)) => {
-                let mut res = c1.partial_cmp(c2).unwrap();
-                if res == Ordering::Equal {
-                    res = t1.partial_cmp(t2).unwrap();
-                    if res == Ordering::Equal {
-                        res = f1.partial_cmp(f2).unwrap()
-                    }
-                };
-                res
-            }
-
-            // Choose empty hole last
-            (Sketch::Hole(_), _) => Ordering::Greater,
-            (_, Sketch::Hole(_)) => Ordering::Less,
-
-            // Then choose variables first
-            (Sketch::Variable(..), _) => Ordering::Less,
-            (_, Sketch::Variable(..)) => Ordering::Greater,
-
-            // Then choose constants to help fail fast?
-            (Sketch::Constant(_), _) => Ordering::Less,
-            (_, Sketch::Constant(_)) => Ordering::Greater,
-
-            // Then we prioritize operations over if's I guess?
-            // Since forward progress should help us terminate faster
-            (Sketch::Operation(..), Sketch::If(..)) => Ordering::Less,
-            (Sketch::If(..), Sketch::Operation(..)) => Ordering::Greater,
-        })
-    }
-}
-
-impl<T: TypeSystemBounds> Ord for Sketch<T> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap()
-    }
-}
+pub type Environment<T> = HashMap<Variable<T>, Constant>;
 
 #[derive(Debug)]
 pub struct InvalidProg {}
@@ -447,26 +275,53 @@ impl<T: TypeSystemBounds> Program<T> {
     pub fn new((node, args): (ProgramNode<T>, Vec<Program<T>>)) -> Self {
         Program { node, args }
     }
-}
 
-impl From<&Program<BaseType>> for BaseType {
-    fn from(p: &Program<BaseType>) -> Self {
-        match &p.node {
-            ProgramNode::Constant(c) => c.clone().into(),
-            ProgramNode::Variable(_, t) => *t,
-            ProgramNode::Operation(o) => o.sig.output,
-            ProgramNode::If => p.args.get(1).unwrap().into(),
-        }
+    pub fn interpret(&self, e: &Environment<T>) -> Result<Constant, InvalidProg> {
+        let Program { node, args } = self;
+        Ok(match node {
+            ProgramNode::Constant(c) => c.clone(),
+            ProgramNode::Variable(v, _) => e.get(v).unwrap().clone(),
+            ProgramNode::Operation(o) => {
+                let args = args.iter().map(|a| a.interpret(e)).try_collect()?;
+                o.execute(&args)?
+            }
+            ProgramNode::If => {
+                if args.get(0).unwrap().interpret(e)? == Constant::Bool(true) {
+                    args.get(1).unwrap().interpret(e)?
+                } else {
+                    args.get(2).unwrap().interpret(e)?
+                }
+            }
+        })
     }
-}
 
-impl From<&Program<RefinementType>> for RefinementType {
-    fn from(p: &Program<RefinementType>) -> Self {
-        match &p.node {
+    pub fn get_behavior(&self, tests: &[TestCase]) -> Vec<TestCase> {
+        tests
+            .iter()
+            .filter_map(|t| {
+                self.interpret(&t.into_env()).ok().map(|output| TestCase {
+                    inputs: t.inputs.clone(),
+                    output,
+                })
+            })
+            .collect()
+    }
+
+    pub fn passes_test_case(&self, t: &TestCase) -> bool {
+        self.interpret(&t.into_env())
+            .map_or(false, |output| output == t.output)
+    }
+
+    pub fn passes_all_test_cases(&self, v: &[TestCase]) -> bool {
+        v.iter().all(|t| self.passes_test_case(t))
+    }
+
+    pub fn get_type(&self) -> T {
+        match &self.node {
             ProgramNode::Constant(c) => c.clone().into(),
             ProgramNode::Variable(_, t) => t.clone(),
             ProgramNode::Operation(o) => o.sig.output.clone(),
-            ProgramNode::If => p.args.get(1).unwrap().into(),
+            ProgramNode::If => self.args.get(1).unwrap().get_type(),
         }
     }
 }
@@ -489,57 +344,6 @@ impl<T: TypeSystemBounds> Display for Program<T> {
                 self.args.get(1).unwrap(),
                 self.args.get(2).unwrap()
             ),
-        }
-    }
-}
-
-impl<T: TypeSystemBounds> Program<T> {
-    pub fn interpret(&self, e: &Environment<T>) -> Result<Constant, InvalidProg> {
-        let Program { node, args } = self;
-        Ok(match node {
-            ProgramNode::Constant(c) => c.clone(),
-            ProgramNode::Variable(v, _) => e.get(v).unwrap().clone(),
-            ProgramNode::Operation(o) => {
-                let args = args.iter().map(|a| a.interpret(e)).try_collect()?;
-                o.execute(&args)?
-            }
-            ProgramNode::If => {
-                if args.get(0).unwrap().interpret(e)? == Constant::Bool(true) {
-                    args.get(1).unwrap().interpret(e)?
-                } else {
-                    args.get(2).unwrap().interpret(e)?
-                }
-            }
-        })
-    }
-
-    pub fn get_behavior(&self, tests: &Vec<TestCase>) -> Vec<TestCase> {
-        tests
-            .iter()
-            .filter_map(|t| {
-                self.interpret(&t.into_env()).ok().map(|output| TestCase {
-                    inputs: t.inputs.clone(),
-                    output,
-                })
-            })
-            .collect()
-    }
-
-    pub fn passes_test_case(&self, t: &TestCase) -> bool {
-        self.interpret(&t.into_env())
-            .map_or(false, |output| output == t.output)
-    }
-
-    pub fn passes_all_test_cases(&self, v: &Vec<TestCase>) -> bool {
-        v.iter().all(|t| self.passes_test_case(t))
-    }
-
-    pub fn get_type(&self) -> T {
-        match &self.node {
-            ProgramNode::Constant(c) => c.clone().into(),
-            ProgramNode::Variable(_, t) => t.clone(),
-            ProgramNode::Operation(o) => o.sig.output.clone(),
-            ProgramNode::If => self.args.get(1).unwrap().get_type(),
         }
     }
 }

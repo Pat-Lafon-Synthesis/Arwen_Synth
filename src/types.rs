@@ -4,6 +4,7 @@ use std::hash::Hash;
 use std::ops::Deref;
 use std::rc::Rc;
 
+use itertools::Itertools;
 use z3::ast::{Ast, Bool, Datatype, Dynamic, Int};
 use z3::{
     Config, Context, DatatypeAccessor, DatatypeBuilder, DatatypeSort, FuncDecl, Solver, Sort,
@@ -12,7 +13,7 @@ use z3::{
 use crate::language::{Constant, InvalidProg};
 
 pub trait TypeSystemBounds:
-    PartialEq + Eq + Hash + Clone + Debug + PartialOrd + Ord + From<Constant>
+    PartialEq + Eq + Hash + Clone + Debug + PartialOrd + Ord + From<Constant> + Display
 {
 }
 
@@ -135,12 +136,12 @@ impl<'ctx> Z3Solver<'ctx> {
         let solver = Solver::new(ctx);
         let int_sort = Sort::int(ctx);
         let bool_sort = Sort::bool(ctx);
-        let list_sort = DatatypeBuilder::new(&ctx, "ListInt")
+        let list_sort = DatatypeBuilder::new(ctx, "ListInt")
             .variant("Nil", vec![])
             .variant(
                 "Cons",
                 vec![
-                    ("head", DatatypeAccessor::Sort(Sort::int(&ctx))),
+                    ("head", DatatypeAccessor::Sort(Sort::int(ctx))),
                     ("tail", DatatypeAccessor::Datatype("ListInt".into())),
                 ],
             )
@@ -177,6 +178,22 @@ pub enum PredicateExpression {
         Box<PredicateExpression>,
     ), // If p then e else e
     Func(PredicateFunction<BaseType>, Vec<PredicateExpression>), // Uninterpred Function
+}
+
+impl Display for PredicateExpression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PredicateExpression::Const(c) => write!(f, "{c}"),
+            PredicateExpression::Var(v, _) => write!(f, "{v}"),
+            PredicateExpression::Plus(e1, e2) => write!(f, "({} + {})", e1, e2),
+            PredicateExpression::Sub(e1, e2) => write!(f, "({} - {})", e1, e2),
+            PredicateExpression::Mul(e1, e2) => write!(f, "({} * {})", e1, e2),
+            PredicateExpression::ITE(p, e1, e2) => write!(f, "(if {p} then {e1} else {e2})"),
+            PredicateExpression::Func(func, args) => {
+                write!(f, "{}({})", func.sym, args.iter().join(", "))
+            }
+        }
+    }
 }
 
 impl PredicateExpression {
@@ -375,6 +392,20 @@ pub enum Predicate {
     Neg(Box<Predicate>),                                       // !p
 }
 
+impl Display for Predicate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Predicate::Bool(b) => write!(f, "{b}"),
+            Predicate::Equal(e1, e2) => write!(f, "({e1} = {e2})"),
+            Predicate::Less(e1, e2) => write!(f, "{e1} < {e2}"),
+            Predicate::Conj(p1, p2) => write!(f, "({p1} && {p2})"),
+            Predicate::Disj(p1, p2) => write!(f, "({p1} || {p2})"),
+            Predicate::Impl(p1, p2) => write!(f, "({p1} => {p2})"),
+            Predicate::Neg(b) => write!(f, "!{b}"),
+        }
+    }
+}
+
 impl Predicate {
     pub fn eval(&self, map: &HashMap<String, Constant>) -> bool {
         match self {
@@ -547,6 +578,22 @@ impl Ord for RefinementType {
 impl Hash for RefinementType {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.ty.hash(state);
+    }
+}
+
+impl Display for RefinementType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{{} | {}}}",
+            match self.ty {
+                BaseType::Int => "int",
+                BaseType::Bool => "bool",
+                BaseType::IntList => "list",
+                BaseType::IntTree => "tree",
+            },
+            self.p
+        )
     }
 }
 

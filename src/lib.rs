@@ -6,296 +6,29 @@
 #![feature(exact_size_is_empty)]
 #![feature(let_chains)]
 #![feature(trait_alias)]
+#![feature(const_option)]
+#![feature(impl_trait_in_assoc_type)]
 
+pub mod data_structures;
 pub mod language;
 pub mod parser_interface;
 pub mod types;
 
-use itertools::Itertools;
 use log::{info, warn};
-use std::cmp::{Ordering, Reverse};
-use std::collections::BinaryHeap;
+use std::fmt::Display;
 use std::hash::Hash;
-use std::iter::once;
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Display,
-    num::NonZeroU64,
-};
+use std::num::NonZeroU8;
 
+use data_structures::*;
 use language::*;
 use types::*;
 
 use ecta_rs::{ECTANode, Edge, Node, ECTA};
 
-const if_depth: usize = 1;
-
-#[derive(Debug)]
-pub struct InverseMap<T: TypeSystemBounds> {
-    pub map: HashMap<Operation<T>, Vec<TestCase>>,
-}
-
-impl<T: TypeSystemBounds> InverseMap<T> {
-    pub fn new(l: &Libraries<T>, FragmentCollection { inner, .. }: &FragmentCollection<T>) -> Self {
-        let type_map: HashMap<T, HashSet<Constant>> = inner
-            .iter()
-            .map(|Fragment { ty, behavior, .. }| {
-                (ty, behavior.iter().map(|TestCase { output, .. }| output))
-            })
-            .fold(HashMap::new(), |mut acc, (t, os)| {
-                let e = acc.entry(t.clone()).or_default();
-                os.for_each(|o| {
-                    e.insert(o.clone());
-                });
-                acc
-            });
-
-        dbg!(&type_map);
-
-        let temp_set = HashSet::new();
-
-        let map: HashMap<Operation<T>, Vec<TestCase>> = l
-            .iter()
-            .map(|o| {
-                let args = o
-                    .sig
-                    .input
-                    .iter()
-                    .map(|i| type_map.get(i).unwrap_or(&temp_set).iter())
-                    .multi_cartesian_product();
-
-                let tests: Vec<_> = args
-                    .filter_map(|a| {
-                        dbg!(&a);
-                        let inputs = a.into_iter().cloned().collect();
-                        let output = o.execute(&inputs).ok()?;
-                        Some(TestCase { inputs, output })
-                    })
-                    .collect();
-                (o.clone(), tests)
-            })
-            .collect();
-
-        InverseMap { map }
-    }
-
-    pub fn inverse_app(&self, o: &Operation<T>, hole: &Vec<TestCase>, idx: usize) -> Vec<TestCase> {
-        let mut ret = Vec::new();
-
-        let inverse_semantics = self.map.get(o).unwrap();
-
-        dbg!(&inverse_semantics);
-        dbg!(&hole);
-        dbg!(idx);
-
-        for TestCase { inputs, output } in hole {
-            let new_inputs = inputs.clone();
-
-            if let Some(x) = inverse_semantics.iter().find(|t| t.output == *output) {
-                let new_output = x.inputs.get(idx).unwrap().clone();
-
-                ret.push(TestCase {
-                    inputs: new_inputs,
-                    output: new_output,
-                });
-            }
-        }
-        ret
-    }
-}
+const IF_DEPTH: usize = 1;
+const MAX_FRAG_SIZE: NonZeroU8 = NonZeroU8::new(5).unwrap();
 
 type Libraries<T> = Vec<Operation<T>>;
-
-#[derive(Debug, Clone, Eq, Ord)]
-pub struct Fragment<T: TypeSystemBounds> {
-    size: NonZeroU64,
-    ty: T,
-    fragment: Program<T>,
-    behavior: Vec<TestCase>,
-}
-
-impl<T: TypeSystemBounds> PartialEq for Fragment<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.behavior == other.behavior
-    }
-}
-
-impl<T: TypeSystemBounds> PartialOrd for Fragment<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match self.size.partial_cmp(&other.size) {
-            Some(core::cmp::Ordering::Equal) => {}
-            ord => return ord,
-        }
-        self.behavior.partial_cmp(&other.behavior)
-    }
-}
-
-impl<T: TypeSystemBounds> Display for Fragment<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}\n\t{}\n",
-            self.fragment,
-            self.behavior.iter().map(ToString::to_string).join("\n\t")
-        )
-    }
-}
-
-#[derive(Debug)]
-pub struct FragmentCollection<T: TypeSystemBounds> {
-    size: NonZeroU64,
-    inner: Vec<Fragment<T>>,
-}
-
-impl<T: TypeSystemBounds> Display for FragmentCollection<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "size = {}\nfargments:\n{}",
-            self.size,
-            self.inner.iter().map(ToString::to_string).join("\n")
-        )
-    }
-}
-
-impl<T: TypeSystemBounds> FragmentCollection<T> {
-    fn new(
-        vars: Vec<Variable<T>>,
-        libraries: &Libraries<T>,
-        testcases: Vec<TestCase>,
-    ) -> FragmentCollection<T> {
-        let size = NonZeroU64::new(1).unwrap();
-
-        FragmentCollection {
-            size,
-            inner: vars
-                .into_iter()
-                .map(|ref v @ Variable { ref ty, .. }| {
-                    let fragment = Program {
-                        node: ProgramNode::Variable(v.clone(), ty.clone()),
-                        args: Vec::new(),
-                    };
-
-                    let behavior = fragment.get_behavior(&testcases);
-
-                    Fragment {
-                        size,
-                        ty: (ty.clone()).into(),
-                        fragment,
-                        behavior,
-                    }
-                })
-                .chain(libraries.iter().filter_map(
-                    |o @ Operation {
-                         sig: Signature { input, output },
-                         ..
-                     }| {
-                        if !input.is_empty() {
-                            None
-                        } else {
-                            let fragment = Program {
-                                node: ProgramNode::Operation(o.clone()),
-                                args: Vec::new(),
-                            };
-
-                            let behavior = fragment.get_behavior(&testcases);
-
-                            Some(Fragment {
-                                size,
-                                ty: output.clone(),
-                                fragment,
-                                behavior,
-                            })
-                        }
-                    },
-                ))
-                .collect(),
-        }
-    }
-
-    fn has_behavior(&self, behavior: &Vec<TestCase>) -> bool {
-        self.inner.iter().any(|f| &f.behavior == behavior)
-    }
-
-    fn increment(&mut self, l: &Libraries<T>, testcases: &Vec<TestCase>) {
-        // grab all components for each type
-        let component_map: HashMap<T, Vec<Fragment<T>>> =
-            self.inner.iter().fold(HashMap::new(), |mut acc, f| {
-                acc.entry(f.ty.clone())
-                    .and_modify(|e: &mut Vec<Fragment<T>>| e.push(f.clone()))
-                    .or_insert(vec![f.clone()]);
-                acc
-            });
-
-        // grab all components the current size
-        let current_size_component_map: HashMap<T, Vec<Fragment<T>>> = component_map
-            .iter()
-            .map(|(k, vs)| {
-                (
-                    k.clone(),
-                    vs.iter().filter(|v| v.size == self.size).cloned().collect(),
-                )
-            })
-            .collect();
-
-        let new_size = self.size.checked_add(1).unwrap();
-        // Create a bunch of new fragments that are strictly one size larger
-        let mut new_fragments = l
-            .iter()
-            .map(|o| -> Vec<Fragment<T>> {
-                (0..o.sig.input.len())
-                    .map(|idx| -> Vec<Vec<Fragment<T>>> {
-                        o.sig
-                            .input
-                            .iter()
-                            .enumerate()
-                            .map(|(i, ty)| {
-                                if i == idx {
-                                    current_size_component_map
-                                        .get(ty)
-                                        .cloned()
-                                        .unwrap_or_else(|| Vec::new())
-                                        .into_iter()
-                                } else {
-                                    component_map
-                                        .get(ty)
-                                        .cloned()
-                                        .unwrap_or_else(|| Vec::new())
-                                        .into_iter()
-                                }
-                            })
-                            .multi_cartesian_product()
-                            .collect()
-                    })
-                    .flatten()
-                    .map(|args| {
-                        let fragment = Program {
-                            node: ProgramNode::Operation(o.clone()),
-                            args: args.into_iter().map(|f| f.fragment).collect(),
-                        };
-                        let behavior = fragment.get_behavior(&testcases);
-                        Fragment {
-                            size: new_size,
-                            ty: o.sig.output.clone(),
-                            fragment,
-                            behavior,
-                        }
-                    })
-                    .filter(|f| !self.has_behavior(&f.behavior))
-                    .collect()
-            })
-            .flatten()
-            .sorted()
-            .dedup()
-            .collect();
-
-        // add these fragments to the collection
-        self.inner.append(&mut new_fragments);
-
-        // increment Fragment Collection size
-        self.size = self.size.checked_add(1).unwrap();
-    }
-}
 
 fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
     assert!(!v.is_empty());
@@ -312,15 +45,15 @@ fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum SynthEctaEdge {
-    P(LinearProgramNode<BaseType>),
-    T(BaseType),
+pub enum SynthEctaEdge<T: TypeSystemBounds> {
+    P(LinearProgramNode<T>),
+    T(T),
 }
 
-impl<'a> TryFrom<&'a SynthEctaEdge> for &'a LinearProgramNode<BaseType> {
+impl<'a, T: TypeSystemBounds> TryFrom<&'a SynthEctaEdge<T>> for &'a LinearProgramNode<T> {
     type Error = ();
 
-    fn try_from(value: &'a SynthEctaEdge) -> Result<Self, Self::Error> {
+    fn try_from(value: &'a SynthEctaEdge<T>) -> Result<Self, Self::Error> {
         match value {
             SynthEctaEdge::P(p) => Ok(p),
             _ => Err(()),
@@ -328,7 +61,7 @@ impl<'a> TryFrom<&'a SynthEctaEdge> for &'a LinearProgramNode<BaseType> {
     }
 }
 
-impl Display for SynthEctaEdge {
+impl<T: TypeSystemBounds> Display for SynthEctaEdge<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SynthEctaEdge::P(p) => write!(f, "{}", p),
@@ -337,18 +70,21 @@ impl Display for SynthEctaEdge {
     }
 }
 
+pub type SynthEcta<T> = ECTA<SynthEctaEdge<T>, ()>;
+pub type SynthEdge<T> = Edge<LinearProgramNode<T>, ()>;
+
 #[derive(Clone, Copy)]
-struct SynthesizerState<'a> {
-    pub ecta: &'a ECTA<SynthEctaEdge, ()>,
-    pub inverse_map: &'a InverseMap<BaseType>,
-    pub bool_fragments: &'a Vec<&'a Fragment<BaseType>>,
+pub struct SynthesizerState<'a, T: TypeSystemBounds> {
+    pub ecta: &'a SynthEcta<T>,
+    pub inverse_map: &'a InverseMap<T>,
+    pub bool_fragments: &'a Vec<&'a Fragment<T>>,
 }
 
-impl<'a> SynthesizerState<'a> {
+impl<'a, T: TypeSystemBounds> SynthesizerState<'a, T> {
     pub fn new(
-        ecta: &'a ECTA<SynthEctaEdge, ()>,
-        inverse_map: &'a InverseMap<BaseType>,
-        bool_fragments: &'a Vec<&'a Fragment<BaseType>>,
+        ecta: &'a ECTA<SynthEctaEdge<T>, ()>,
+        inverse_map: &'a InverseMap<T>,
+        bool_fragments: &'a Vec<&'a Fragment<T>>,
     ) -> Self {
         Self {
             ecta,
@@ -358,9 +94,9 @@ impl<'a> SynthesizerState<'a> {
     }
 }
 
-fn create_ecta_from_traces(
-    ecta: &mut ECTA<SynthEctaEdge, ()>,
-    frags: &[&Program<BaseType>],
+fn create_ecta_from_traces<T: TypeSystemBounds>(
+    ecta: &mut ECTA<SynthEctaEdge<T>, ()>,
+    frags: &[&Program<T>],
 ) -> ECTANode {
     info!("Starting ECTA creation from traces...");
 
@@ -376,7 +112,7 @@ fn create_ecta_from_traces(
         .group_by(|p1, p2| p1.node == p2.node)
         .map(|g| {
             let prog_edge = SynthEctaEdge::P(g[0].node.clone().try_into().unwrap());
-            let ty_edge = SynthEctaEdge::T(g[0].into());
+            let ty_edge = SynthEctaEdge::T(g[0].get_type());
 
             let type_node =
                 ecta.add_node(Node::new(), vec![(ty_edge, None, vec![ecta.empty_node])]);
@@ -384,7 +120,7 @@ fn create_ecta_from_traces(
             let mut node_collector = vec![type_node];
             if let ProgramNode::Operation(_) = g[0].node {
                 let x = g
-                    .into_iter()
+                    .iter()
                     .map(|Program { node, args }| match node {
                         ProgramNode::Constant(..) | ProgramNode::Variable(..) => unreachable!(),
                         ProgramNode::Operation(_) => args.clone(),
@@ -647,248 +383,33 @@ impl<'a> Iterator for SynthIterator<'a> {
     }
 } */
 
-#[derive(PartialEq, Eq)]
-struct HoleMetaData {
-    path: Vec<u8>,
-    nodeid: ECTANode,
-    examples: Vec<TestCase>,
-    typ: BaseType,
-    if_depth: usize,
-    recursion_allowed: bool,
-}
-
-#[derive(PartialEq, Eq)]
-struct SketchWithData {
-    sketch: Sketch<BaseType>,
-    holes: Vec<HoleMetaData>,
-}
-
-impl PartialOrd for SketchWithData {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.sketch.partial_cmp(&other.sketch)
-    }
-}
-
-impl Ord for SketchWithData {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap()
-    }
-}
-
-fn sketch_constructor<'a>(
-    state: &'a SynthesizerState<'a>,
-    sketch: Sketch<BaseType>,
-    path: std::slice::Iter<'a, u8>,
-) -> impl Fn(SketchWithData) -> SketchWithData + 'a {
-    move |x| -> SketchWithData {
-        let path = path.clone();
-        let sketch = sketch.clone();
-        fn helper<'a>(
-            state: &'a SynthesizerState<'a>,
-            x: SketchWithData,
-            mut path: std::slice::Iter<'a, u8>,
-            sketch: Sketch<BaseType>,
-        ) -> SketchWithData {
-            if path.is_empty() {
-                x
-            } else {
-                let i = *path.next().unwrap();
-                match sketch {
-                    Sketch::Hole(_) | Sketch::Constant(_) | Sketch::Variable(..) => panic!(),
-                    Sketch::Operation(o, mut args) => {
-                        let SketchWithData { sketch, holes } =
-                            helper(state, x, path, args[i as usize].clone());
-                        args[i as usize] = sketch;
-
-                        let holes = holes
-                            .into_iter()
-                            .map(|h| {
-                                let examples =
-                                    state.inverse_map.inverse_app(&o, &h.examples, i as usize);
-                                HoleMetaData {
-                                    path: once(i).chain(h.path).collect(),
-                                    examples,
-                                    nodeid: h.nodeid,
-                                    typ: h.typ,
-                                    if_depth,
-                                    recursion_allowed: h.recursion_allowed,
-                                }
-                            })
-                            .collect();
-
-                        SketchWithData {
-                            sketch: Sketch::Operation(o, args),
-                            holes,
-                        }
-                    }
-                    Sketch::If(..) => todo!(),
-                }
-            }
-        }
-        helper(state, x, path, sketch)
-    }
-}
-
-fn get_edge_candidates<'a>(
-    state: &SynthesizerState<'a>,
-    holedata: &HoleMetaData,
-) -> Vec<SketchWithData> {
-    if holedata.nodeid == state.ecta.empty_node {
-        info!("The empty node has no candidates");
-
-        return Vec::new();
-    }
-
-    let edges = state.ecta.get_edges(holedata.nodeid).filter_map(|e| {
-        if matches!(e.data, SynthEctaEdge::T(_)) {
-            None
-        } else {
-            Some(e.clone().map(|s| match s {
-                SynthEctaEdge::P(p) => p,
-                _ => unreachable!(),
-            }))
-        }
-    });
-
-    if edges.clone().next().is_none() {
-        info!("No edge candidates");
-        return Vec::new();
-    }
-
-    let mut iterable: Vec<(
-        LinearProgramNode<BaseType>,
-        Vec<Edge<LinearProgramNode<BaseType>, ()>>,
-    )> = Vec::new();
-
-    edges
-        .sorted_by(|a, b| a.data.cmp(&b.data))
-        .group_by(|edge| edge.data.clone())
-        .into_iter()
-        .for_each(|(k, v)| {
-            iterable.push((
-                k,
-                v.into_iter()
-                    .sorted_by(|p1, p2| p1.edge_num.cmp(&p2.edge_num))
-                    .collect(),
-            ))
-        });
-
-    iterable
-        .into_iter()
-        .map(|(p_node, edges)| match p_node {
-            LinearProgramNode::Constant(c) => SketchWithData {
-                sketch: Sketch::Constant(c),
-                holes: Vec::new(),
-            },
-            LinearProgramNode::Variable(v, t) => SketchWithData {
-                sketch: Sketch::Variable(v, t),
-                holes: Vec::new(),
-            },
-            LinearProgramNode::Operation(o) => {
-                let args = o.sig.input.iter().map(|t| Sketch::Hole(*t)).collect();
-                let holes = o
-                    .sig
-                    .input
-                    .iter()
-                    .zip(edges.iter())
-                    .map(|(t, e)| HoleMetaData {
-                        path: vec![e.edge_num],
-                        examples: todo!(),
-                        nodeid: e.nodeidx,
-                        typ: *t,
-                        if_depth: holedata.if_depth,
-                        recursion_allowed: holedata.recursion_allowed,
-                    })
-                    .collect();
-                SketchWithData {
-                    sketch: Sketch::Operation(o, args),
-                    holes,
-                }
-            }
-        })
-        .collect()
-}
-
-fn fill_sketch_hole<'a>(
-    state: &SynthesizerState<'a>,
-    mut sketch: SketchWithData,
-) -> Vec<SketchWithData> {
-    // What do you need to fill a sketch?
-    // Where is the hole?
-    // What can I fill it with?
-    // Sketch has a spine to the location of the hole
-    // Sketch has a node in the ecta
-
-    let holedata = sketch.holes.pop().unwrap();
-    // walk to the hole,
-    // then construct new ones with the hole filled(possibly with new holes)
-    let f = sketch_constructor(state, sketch.sketch, holedata.path.iter());
-
-    let candidates = get_edge_candidates(state, &holedata);
-
-    let sketches = candidates.into_iter().map(f).collect();
-
-    /*
-        state.if_depth;
-        state.recursion_allowed;
-
-        // If recursive call, check extra consistency
-        todo!();
-    */
-    sketches
-}
-
-fn complete_sketch(sketch: &SketchWithData) -> bool {
-    sketch.holes.is_empty()
-}
-
-struct MinHeap<T: Ord>(BinaryHeap<Reverse<T>>);
-
-impl<T: Ord> MinHeap<T> {
-    fn new() -> Self {
-        MinHeap(BinaryHeap::new())
-    }
-    fn push(&mut self, item: T) {
-        self.0.push(Reverse(item))
-    }
-
-    fn pop(&mut self) -> Option<T> {
-        self.0.pop().map(|Reverse(item)| item)
-    }
-}
-
-fn deduce2<'a>(
-    state: SynthesizerState<'a>,
+fn deduce2<T: TypeSystemBounds>(
+    state: SynthesizerState<T>,
     node: ECTANode,
-    hole: Vec<TestCase>,
-    target_type: BaseType,
-) -> Option<Program<BaseType>> {
+    hole: Examples,
+    target_type: T,
+) -> Option<Program<T>> {
     info!("start deduction");
     if node == state.ecta.empty_node {
         warn!("Empty node in deduce");
         panic!();
     }
 
-    let initial = SketchWithData {
-        sketch: Sketch::Hole(target_type),
-        holes: vec![HoleMetaData {
-            path: Vec::new(),
-            examples: hole,
-            nodeid: node,
-            typ: target_type,
-            if_depth: 0,
-            recursion_allowed: false,
-        }],
-    };
+    let initial = SketchWithData::from_hole(target_type, node, hole);
+
+    info!("Initial sketch = {initial}");
 
     let mut queue = MinHeap::new();
     queue.push(initial);
 
     while let Some(sketch) = queue.pop() {
-        for s in fill_sketch_hole(&state, sketch) {
-            if complete_sketch(&s) {
-                return s.sketch.try_into().ok();
+        info!("Sketch in consideration = {sketch}");
+        for s in sketch.fill_hole(&state, state.inverse_map) {
+            if s.is_complete() {
+                info!("Complete sketch = {s}");
+                return s.try_into().ok();
             } else {
+                info!("Pushed sketch onto the queue = {s}");
                 queue.push(s);
             }
         }
@@ -946,7 +467,7 @@ fn deduce2<'a>(
 }
  */
 fn top_down_prop(
-    hole: Vec<TestCase>,
+    hole: Examples,
     traces: Vec<&Fragment<BaseType>>,
     inverse_map: &InverseMap<BaseType>,
     fragment_collection: &FragmentCollection<BaseType>,
@@ -971,12 +492,7 @@ fn top_down_prop(
     info!("Ecta = {}", ecta.get_dot());
 
     // Used in generating if conditions
-    let bool_fragments = fragment_collection
-        .inner
-        .iter()
-        .filter(|f| f.ty == BaseType::Bool)
-        .sorted_by_key(|f| f.size)
-        .collect();
+    let bool_fragments = fragment_collection.get_all_sorted(&BaseType::Bool);
 
     let synthesis_state = SynthesizerState::new(&ecta, inverse_map, &bool_fragments);
 
@@ -988,7 +504,7 @@ fn top_down_prop(
 pub fn synthesis(
     sig: Signature<BaseType>,
     l: &Libraries<BaseType>,
-    tests: &Vec<TestCase>,
+    tests: Examples,
     mut size: u8,
 ) -> Option<Program<BaseType>> {
     use std::io::Write;
@@ -1011,7 +527,7 @@ pub fn synthesis(
         .enumerate()
         .map(|(i, ty)| Variable {
             name: format!("arg{i}"),
-            ty: ty.clone(),
+            ty: *ty,
         })
         .collect();
     let mut frags = FragmentCollection::new(variables, l, tests.clone());
@@ -1030,13 +546,9 @@ pub fn synthesis(
         let inverse_map = InverseMap::new(l, &frags);
 
         info!("Creating traces");
-        let traces: Vec<&Fragment<BaseType>> = frags
-            .inner
-            .iter()
-            .filter(|Fragment { behavior, .. }| behavior.iter().any(|t| tests.contains(t)))
-            .collect();
+        let traces: Vec<&Fragment<BaseType>> = frags.find_valid_traces(&tests);
 
-        info!("Printing traces of up to size {}", frags.size);
+        info!("Printing traces of up to size {}", frags.get_size());
         traces.iter().for_each(|t| info!("trace = {t}"));
 
         let complete_traces: Vec<_> = traces
@@ -1053,7 +565,7 @@ pub fn synthesis(
             return Some(p);
         } else {
             frags.increment(l, &tests);
-            if frags.size > NonZeroU64::new(10).unwrap() {
+            if frags.get_size() > MAX_FRAG_SIZE {
                 eprintln!("We failed to synthesize anything in a bound of size 10");
                 return None;
             }
