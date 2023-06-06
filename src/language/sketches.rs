@@ -901,7 +901,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                 .join("")
         );
 
-        #[cfg(debug_assertions)]
+        /* #[cfg(debug_assertions)] */
         candidates
             .iter()
             .for_each(|s| s.assert_valid_state(state.ecta, holedata.nodeid));
@@ -929,7 +929,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                 .join("")
         );
 
-        #[cfg(debug_assertions)]
+        /* #[cfg(debug_assertions)] */
         candidates
             .iter()
             .for_each(|s| s.assert_valid_state(state.ecta, holedata.nodeid));
@@ -961,7 +961,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                 .join("")
         );
 
-        #[cfg(debug_assertions)]
+        /* #[cfg(debug_assertions)] */
         sketches
             .iter()
             .for_each(|s| s.assert_valid_state(state.ecta, state.start_node));
@@ -1002,7 +1002,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
         }
     }
 
-    #[cfg(debug_assertions)]
+    /* #[cfg(debug_assertions)] */
     /// For checking if all the holes are valid
     pub fn assert_valid_state(&self, ecta: &SynthEcta<T>, start_node: ECTANode) {
         let SketchWithData { sketch, mut holes } = self.clone();

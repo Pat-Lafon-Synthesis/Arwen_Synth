@@ -77,7 +77,7 @@ pub struct SynthesizerState<'a, T: TypeSystemBounds> {
     /// Signature to reconstruct for a recursive function call
     pub sig: &'a Signature<T>,
     pub fragment_collection: &'a FragmentCollection<T>,
-    #[cfg(debug_assertions)]
+    /* #[cfg(debug_assertions)] */
     /// For debugging purposes
     pub start_node: ECTANode,
     pub type_map: &'a TypeMap<T>,
@@ -91,7 +91,7 @@ impl<'a, T: TypeSystemBounds> SynthesizerState<'a, T> {
         sig: &'a Signature<T>,
         fragment_collection: &'a FragmentCollection<T>,
         type_map: &'a TypeMap<T>,
-        #[cfg(debug_assertions)] start_node: ECTANode,
+        /* #[cfg(debug_assertions)] */ start_node: ECTANode,
     ) -> Self {
         Self {
             ecta,
@@ -100,7 +100,7 @@ impl<'a, T: TypeSystemBounds> SynthesizerState<'a, T> {
             sig,
             fragment_collection,
             type_map,
-            #[cfg(debug_assertions)]
+            /* #[cfg(debug_assertions)] */
             start_node,
         }
     }
@@ -186,13 +186,13 @@ fn top_down_prop<T: TypeSystemBounds>(
         .filter(|f| f.contains_variable())
         .collect();
 
-    cfg_if::cfg_if! {
-        if #[cfg(debug_assertions)] {
+/*     cfg_if::cfg_if! {
+        if #[cfg(debug_assertions)] { */
             let synthesis_state = SynthesizerState::new(&ecta, inverse_map, &bool_fragments, signature, fragment_collection, type_map, top_node);
-        } else {
+/*         } else {
             let synthesis_state = SynthesizerState::new(&ecta, inverse_map, &bool_fragments, signature, fragment_collection, type_map);
         }
-    }
+    } */
 
     let prog_iter = deduce2(synthesis_state, top_node, hole.clone(), target_type);
 
