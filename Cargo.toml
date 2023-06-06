@@ -20,7 +20,7 @@ cfg-if = "1.0.0"
 petgraph = "0.6.3"
 
 [dev-dependencies]
-criterion = "0.4"
+criterion = "0.5"
 
 [patch.crates-io]
 z3 = {git = "https://github.com/prove-rs/z3.rs.git"}
