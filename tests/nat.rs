@@ -1,6 +1,6 @@
-use std::{fs::File, io::Read};
-
+use arwen_synth::language::Examples;
 use arwen_synth::{parser_interface::parse, synthesis};
+use std::{fs::File, io::Read};
 
 mod libraries;
 use libraries::nat_library;
@@ -18,7 +18,7 @@ macro_rules! make_test {
             let prog = synthesis(
                 synth_problem.sig.into(),
                 $($libs)*,
-                synth_problem.tests.tests.into(),
+                Examples::new(synth_problem.tests.tests, Vec::new()),
                 3,
             );
             insta::assert_display_snapshot!(prog.unwrap());

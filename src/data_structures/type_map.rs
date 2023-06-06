@@ -14,7 +14,7 @@ pub struct TypeMap<T: TypeSystemBounds> {
 }
 
 impl<T: TypeSystemBounds> TypeMap<T> {
-    pub fn new(l: &Vec<Operation<T>>) -> Self {
+    pub fn new(l: &[Operation<T>]) -> Self {
         let mut int_map = HashMap::new();
         let mut bool_map = HashMap::new();
         let mut list_map = HashMap::new();

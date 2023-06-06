@@ -18,7 +18,7 @@ fn deductive_synthesis_zero() {
             ),
         },
     };
-    let tests = Examples::new(Vec::new());
+    let tests = Examples::new(Vec::new(), Vec::new());
 
     let l = vec![Operation {
         name: "zero".to_string(),
@@ -32,7 +32,7 @@ fn deductive_synthesis_zero() {
                 ),
             },
         },
-        code: Rc::new(|args: &Vec<_>| Ok(Constant::Int(0))),
+        code: Rc::new(|_args: &Vec<_>| Ok(Constant::Int(0))),
     }];
 
     let prog = synthesis(sig, &l, tests, 3);
@@ -52,7 +52,7 @@ fn deductive_synthesis_one() {
             ),
         },
     };
-    let tests = Examples::new(Vec::new());
+    let tests = Examples::new(Vec::new(), Vec::new());
 
     let l = vec![
         Operation {
@@ -60,7 +60,7 @@ fn deductive_synthesis_one() {
             sig: Signature {
                 input: vec![RefinementType {
                     ty: BaseType::Int,
-                    p: Predicate::True,
+                    p: Predicate::Bool(true),
                 }],
                 output: RefinementType {
                     ty: BaseType::Int,
@@ -88,7 +88,7 @@ fn deductive_synthesis_one() {
                     ),
                 },
             },
-            code: Rc::new(|args: &Vec<_>| Ok(Constant::Int(0))),
+            code: Rc::new(|_args: &Vec<_>| Ok(Constant::Int(0))),
         },
     ];
 

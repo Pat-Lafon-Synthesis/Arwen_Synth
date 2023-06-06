@@ -1,7 +1,4 @@
-use std::{
-    fmt::{Debug, Display},
-    ops::{Deref, DerefMut},
-};
+use std::fmt::{Debug, Display};
 
 use itertools::Itertools;
 use log::info;
@@ -27,47 +24,75 @@ impl Display for TestCase {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct Examples(Vec<TestCase>);
-
-impl Deref for Examples {
-    type Target = Vec<TestCase>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Examples {
+    positive_examples: Vec<TestCase>,
+    negative_examples: Vec<TestCase>,
 }
 
-impl DerefMut for Examples {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
+fn filter_behavior<T: TypeSystemBounds, P: Fn(&Constant) -> bool>(
+    iter: Vec<TestCase>,
+    cond: &LinearProgram<T>,
+    predicate: P,
+) -> Vec<TestCase> {
+    iter.into_iter()
+        .filter(|t: &TestCase| {
+            let e = t.into();
+            if let Ok(res) = cond.interpret(&e) {
+                assert!(matches!(res, Constant::Bool(_)));
+                predicate(&res)
+            } else {
+                info!("Had an invalid program while filtering behaviour: {cond}");
+                false
+            }
+        })
+        .collect::<Vec<TestCase>>()
 }
 
-impl Debug for Examples {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl From<Vec<TestCase>> for Examples {
-    fn from(value: Vec<TestCase>) -> Self {
-        Examples(value)
-    }
-}
-
-impl IntoIterator for Examples {
-    type Item = TestCase;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
+fn filter_behavior_p<T: TypeSystemBounds, P: Fn(&Constant) -> bool>(
+    iter: Vec<TestCase>,
+    cond: &Program<T>,
+    predicate: &P,
+) -> Vec<TestCase> {
+    iter.into_iter()
+        .filter(|t: &TestCase| {
+            let e = t.into();
+            if let Ok(res) = cond.interpret(&e, cond) {
+                assert!(matches!(res, Constant::Bool(_)));
+                predicate(&res)
+            } else {
+                info!("Had an invalid program while filtering behaviour: {cond}");
+                false
+            }
+        })
+        .collect::<Vec<TestCase>>()
 }
 
 impl Examples {
-    pub fn new(tests: Vec<TestCase>) -> Self {
-        Examples(tests)
+    pub fn new(positive_examples: Vec<TestCase>, negative_examples: Vec<TestCase>) -> Self {
+        Self {
+            positive_examples,
+            negative_examples,
+        }
+    }
+
+    pub fn extend(&mut self, other: Examples) {
+        self.positive_examples.extend(other.positive_examples);
+        self.negative_examples.extend(other.negative_examples);
+    }
+
+    pub fn get_positive_examples(&self) -> &[TestCase] {
+        &self.positive_examples
+    }
+
+    pub fn get_negative_examples(&self) -> &[TestCase] {
+        &self.negative_examples
+    }
+
+    pub fn get_all_examples(&self) -> Vec<TestCase> {
+        let mut res = self.positive_examples.clone();
+        res.extend(self.negative_examples.clone());
+        res
     }
 
     pub fn filter_behavior<T: TypeSystemBounds, P: Fn(&Constant) -> bool>(
@@ -75,41 +100,29 @@ impl Examples {
         cond: &LinearProgram<T>,
         predicate: P,
     ) -> Examples {
-        self.clone()
-            .into_iter()
-            .filter(|t| {
-                let e = t.into();
-                if let Ok(res) = cond.interpret(&e) {
-                    assert!(matches!(res, Constant::Bool(_)));
-                    predicate(&res)
-                } else {
-                    info!("Had an invalid program while filtering behaviour: {cond}");
-                    false
-                }
-            })
-            .collect::<Vec<TestCase>>()
-            .into()
+        let Examples {
+            positive_examples,
+            negative_examples,
+        } = self;
+        Examples::new(
+            filter_behavior(positive_examples.clone(), cond, &predicate),
+            filter_behavior(negative_examples.clone(), cond, &predicate),
+        )
     }
 
     pub fn filter_behavior_p<T: TypeSystemBounds, P: Fn(&Constant) -> bool>(
         &self,
         cond: &Program<T>,
-        predicate: P,
+        predicate: &P,
     ) -> Examples {
-        self.clone()
-            .into_iter()
-            .filter(|t| {
-                let e = t.into();
-                if let Ok(res) = cond.interpret(&e, cond) {
-                    assert!(matches!(res, Constant::Bool(_)));
-                    predicate(&res)
-                } else {
-                    info!("Had an invalid program while filtering behaviour: {cond}");
-                    false
-                }
-            })
-            .collect::<Vec<TestCase>>()
-            .into()
+        let Examples {
+            positive_examples,
+            negative_examples,
+        } = self;
+        Examples::new(
+            filter_behavior_p(positive_examples.clone(), cond, predicate),
+            filter_behavior_p(negative_examples.clone(), cond, predicate),
+        )
     }
 
     /// Provide a list of examples for each argument of the operation.
@@ -125,17 +138,21 @@ impl Examples {
     }
 
     /// Helper for getting a set of examples for the arguments to a recursive function.
+    /// Does not translate over any negative examples
     pub fn rec_compute_example_args(&self, num_args: usize) -> Vec<Examples> {
         (0..num_args)
             .map(|idx| {
-                self.clone()
-                    .into_iter()
-                    .map(|mut t| {
-                        t.output = t.inputs[idx].clone();
-                        t
-                    })
-                    .collect_vec()
-                    .into()
+                Examples::new(
+                    self.positive_examples
+                        .clone()
+                        .into_iter()
+                        .map(|mut t| {
+                            t.output = t.inputs[idx].clone();
+                            t
+                        })
+                        .collect_vec(),
+                    Vec::new(),
+                )
             })
             .collect()
     }
@@ -143,12 +160,12 @@ impl Examples {
     // New examples for the inter recursive case
     pub fn rec_new_examples(&self, other: &Examples) -> Examples {
         let mut new_examples = Vec::new();
-        for t in self.clone().into_iter() {
-            if !other.contains(&t) {
+        for t in self.positive_examples.clone().into_iter() {
+            if !other.positive_examples.contains(&t) {
                 new_examples.push(t);
             }
         }
-        new_examples.into()
+        Examples::new(new_examples, Vec::new())
     }
 
     pub fn combine(&self, other: &Examples) -> Examples {
@@ -156,14 +173,24 @@ impl Examples {
         combined.extend(other.clone());
         combined
     }
+
+    pub fn is_consistent_with<F: Fn(&TestCase) -> bool>(&self, f: F) -> bool {
+        self.positive_examples.iter().all(&f) && self.negative_examples.iter().all(|t| !f(t))
+    }
 }
 
 impl Display for Examples {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "[{}]",
-            self.iter()
+            "{{pos: [{}], neg: [{}]}}",
+            self.positive_examples
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<String>>()
+                .join(", "),
+            self.negative_examples
+                .iter()
                 .map(|t| t.to_string())
                 .collect::<Vec<String>>()
                 .join(", ")

@@ -56,14 +56,11 @@ fn test_ecta_conversion() {
     // hd(cons(inc(O()),tail(arg0)))
     let p5 = LinearProgram::<BaseType>::new(
         LinearProgramNode::Operation(hd.clone()),
-        vec![cons_1_tail_a0.clone()],
+        vec![cons_1_tail_a0],
     );
 
     //inc(hd(tail(arg0)))
-    let hd_tail_a0 = LinearProgram::new(
-        LinearProgramNode::Operation(hd.clone()),
-        vec![tail_a0.clone()],
-    );
+    let hd_tail_a0 = LinearProgram::new(LinearProgramNode::Operation(hd.clone()), vec![tail_a0]);
     let p6 =
         LinearProgram::<BaseType>::new(LinearProgramNode::Operation(inc.clone()), vec![hd_tail_a0]);
 
@@ -74,7 +71,7 @@ fn test_ecta_conversion() {
             LinearProgram::new(LinearProgramNode::Operation(nil.clone()), vec![]),
         ],
     );
-    let hd_a0 = LinearProgram::new(LinearProgramNode::Operation(hd.clone()), vec![arg0.clone()]);
+    let hd_a0 = LinearProgram::new(LinearProgramNode::Operation(hd.clone()), vec![arg0]);
 
     // hd(cons(inc(inc(O())),cons(hd(arg0),cons(O(),nil()))))
     let p7 = LinearProgram::<BaseType>::new(
@@ -85,7 +82,7 @@ fn test_ecta_conversion() {
                 p4.clone(),
                 LinearProgram::new(
                     LinearProgramNode::Operation(cons.clone()),
-                    vec![hd_a0.clone(), cons_0_nil.clone()],
+                    vec![hd_a0, cons_0_nil],
                 ),
             ],
         )],

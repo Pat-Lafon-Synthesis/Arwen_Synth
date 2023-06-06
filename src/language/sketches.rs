@@ -28,12 +28,13 @@ pub enum Sketch<T: TypeSystemBounds> {
 }
 
 impl<T: TypeSystemBounds> Sketch<T> {
-    fn is_example_consistent(
+    fn is_example_consistent_helper(
         &self,
         e: &Examples,
         state: &SynthesizerState<T>,
         current_node: ECTANode,
         full_sketch: (&Self, &Examples),
+        last_rec_arg: Option<&Constant>,
     ) -> bool {
         //info!("Checking consistency of {self} with {e}");
         match self {
@@ -45,13 +46,13 @@ impl<T: TypeSystemBounds> Sketch<T> {
                 res
             }
             Sketch::Constant(c) => {
-                e.iter().all(|TestCase { output, .. }| output == c)
+                e.is_consistent_with(|TestCase { output, .. }| output == c)
                     && LinearProgramNode::Constant(c.clone())
                         .ecta_next_program_nodes(state.ecta, current_node)
                         .is_some()
             }
             Sketch::Variable(v) => {
-                e.iter().all(|t| {
+                e.is_consistent_with(|t| {
                     Into::<Environment<T>>::into(t)
                         .get(v)
                         .map(|c| c == &t.output)
@@ -71,7 +72,7 @@ impl<T: TypeSystemBounds> Sketch<T> {
                         };
                         let res = p.interpret(&Environment::new(), &p).unwrap();
 
-                        e.iter().all(|TestCase { output, .. }| output == &res)
+                        e.is_consistent_with(|TestCase { output, .. }| output == &res)
                     } else {
                         info!("Current thing: {self}");
                         info!("Current examples: {e:?}");
@@ -86,11 +87,12 @@ impl<T: TypeSystemBounds> Sketch<T> {
                         args.iter().enumerate().zip(product_vec_examples).all(
                             |((idx, a), e_vec)| {
                                 e_vec.into_iter().any(|e_single| {
-                                    a.is_example_consistent(
+                                    a.is_example_consistent_helper(
                                         &e_single,
                                         state,
                                         edges[idx],
                                         full_sketch,
+                                        last_rec_arg,
                                     )
                                 })
                             },
@@ -102,51 +104,44 @@ impl<T: TypeSystemBounds> Sketch<T> {
                 }
             }
             Sketch::If(b, s1, s2) => {
-                b.get_behavior(e).len() == e.len()
-                    && s1.is_example_consistent(
-                        &e.filter_behavior_p(b, |c| c == &Constant::Bool(true)),
+                // Check that all the different examples bool is evaluated in have valid outputs
+                b.get_behavior(e.get_positive_examples()).len() == e.get_positive_examples().len()
+                    && b.get_behavior(e.get_negative_examples()).len()
+                        == e.get_negative_examples().len()
+                        // And that each of the branches are consistent with the examples
+                    && s1.is_example_consistent_helper(
+                        &e.filter_behavior_p(b, &|c| c == &Constant::Bool(true)),
                         state,
                         current_node,
                         full_sketch,
+                        last_rec_arg
                     )
-                    && s2.is_example_consistent(
-                        &e.filter_behavior_p(b, |c| c == &Constant::Bool(false)),
+                    && s2.is_example_consistent_helper(
+                        &e.filter_behavior_p(b, &|c| c == &Constant::Bool(false)),
                         state,
                         current_node,
                         full_sketch,
+                        last_rec_arg
                     )
             }
             Sketch::Rec(_t, _args) => {
                 info!("Check that rec is consistent");
                 info!("TODO: returning false");
+                info!("Rec being consistent means that the first arg is always decreasing also");
                 //todo!();
                 false
-                // Check each recursive arg is consistent
-                /* if !args
-                    .iter()
-                    .zip(e.rec_compute_example_args(args.len()).into_iter())
-                    .all(|(a, e_single)| {
-                        a.is_example_consistent(&e_single, inverse_map, full_sketch)
-                    })
-                {
-                    return false;
-                }
-
-                // Check that sketch is consistent with the other examples
-                // Add those examples to ground truth?
-                let remaining_examples = e.rec_new_examples(full_sketch.1);
-
-                let full_sketch_new_examples = remaining_examples.combine(&full_sketch.1);
-
-                let new_full_sketch = (full_sketch.0, &full_sketch_new_examples);
-
-                full_sketch.0.is_example_consistent(
-                    &remaining_examples,
-                    inverse_map,
-                    new_full_sketch,
-                ) */
             }
         }
+    }
+
+    fn is_example_consistent(
+        &self,
+        e: &Examples,
+        state: &SynthesizerState<T>,
+        current_node: ECTANode,
+        full_sketch: (&Self, &Examples),
+    ) -> bool {
+        self.is_example_consistent_helper(e, state, current_node, full_sketch, None)
     }
 }
 
@@ -506,7 +501,7 @@ impl<T: TypeSystemBounds> HoleMetaData<T> {
             .type_map
             .get_all_subtypes(&self.typ)
             .into_iter()
-            .map(|o| {
+            .flat_map(|o| {
                 let lin_o = LinearProgramNode::Operation(o.clone());
                 let edges = lin_o
                     .ecta_next_program_nodes(state.ecta, self.nodeid)
@@ -523,7 +518,6 @@ impl<T: TypeSystemBounds> HoleMetaData<T> {
                     true,
                 )
             })
-            .flatten()
             .collect_vec();
 
         // todo: create if statements
@@ -789,7 +783,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                             let new_e = hmd
                                 .examples
                                 .filter_behavior(&b.fragment, |c| c == &Constant::Bool(true));
-                            if new_e.is_empty() {
+                            if new_e.get_positive_examples().is_empty() {
                                 None
                             } else {
                                 hmd.examples = new_e;
@@ -810,7 +804,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                     .examples
                     .filter_behavior(&b.fragment, |c| c == &Constant::Bool(false));
 
-                if false_hole.examples.is_empty() {
+                if false_hole.examples.get_positive_examples().is_empty() {
                     info!("Ruled out sketch because no examples for false branch");
                     return None;
                 }

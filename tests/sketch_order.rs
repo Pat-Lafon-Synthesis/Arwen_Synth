@@ -67,7 +67,7 @@ fn sketch_order() {
             node: ProgramNode::Operation(tail.clone()),
             args: vec![Program {
                 node: ProgramNode::Operation(tail),
-                args: vec![arg0.clone()],
+                args: vec![arg0],
             }],
         }],
     };

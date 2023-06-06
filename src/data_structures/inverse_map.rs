@@ -67,20 +67,23 @@ impl<T: TypeSystemBounds> InverseMap<T> {
         let inverse_semantics = self.map.get(o).unwrap();
 
         // Filter out the inverse semantics that don't match the given testcase in the example
-        let t_iter = hole.iter().map(|TestCase { inputs, output }| {
-            inverse_semantics
-                .iter()
-                .filter(|x| x.output == *output)
-                .map(|x| {
-                    let new_inputs = inputs.clone();
-                    let new_output = x.inputs.get(idx).unwrap().clone();
-                    TestCase {
-                        inputs: new_inputs,
-                        output: new_output,
-                    }
-                })
-                .collect_vec()
-        });
+        let t_iter = hole
+            .get_positive_examples()
+            .iter()
+            .map(|TestCase { inputs, output }| {
+                inverse_semantics
+                    .iter()
+                    .filter(|x| x.output == *output)
+                    .map(|x| {
+                        let new_inputs = inputs.clone();
+                        let new_output = x.inputs.get(idx).unwrap().clone();
+                        TestCase {
+                            inputs: new_inputs,
+                            output: new_output,
+                        }
+                    })
+                    .collect_vec()
+            });
 
         // If any of these didn't work out, then we don't have inverse semantics for one of the fuction arguments
         if t_iter.clone().any(|i| i.is_empty()) {
@@ -92,7 +95,7 @@ impl<T: TypeSystemBounds> InverseMap<T> {
         Some(
             t_iter
                 .multi_cartesian_product()
-                .map(|args| args.into())
+                .map(|args| Examples::new(args, hole.get_negative_examples().to_vec()))
                 .collect(),
         )
     }

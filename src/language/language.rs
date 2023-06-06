@@ -581,15 +581,6 @@ impl<T: TypeSystemBounds> Program<T> {
             .collect()
     }
 
-    pub fn passes_test_case(&self, t: &TestCase) -> bool {
-        self.interpret(&t.into(), self)
-            .map_or(false, |output| output == t.output)
-    }
-
-    pub fn passes_all_test_cases(&self, v: &[TestCase]) -> bool {
-        v.iter().all(|t| self.passes_test_case(t))
-    }
-
     pub fn get_type(&self) -> T {
         match &self.node {
             ProgramNode::Constant(c) => c.clone().into(),

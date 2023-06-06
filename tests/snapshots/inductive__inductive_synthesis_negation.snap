@@ -1,0 +1,5 @@
+---
+source: tests/inductive.rs
+expression: prog.unwrap()
+---
+not(arg0)

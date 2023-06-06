@@ -113,7 +113,7 @@ fn deduce2<T: TypeSystemBounds>(
     target_type: T,
 ) -> Option<Program<T>> {
     info!("start deduction");
-    if node == state.ecta.empty_node && !hole.is_empty() {
+    if node == state.ecta.empty_node && !hole.get_positive_examples().is_empty() {
         warn!("Empty node in deduce");
         panic!();
     }
@@ -158,7 +158,7 @@ fn top_down_prop<T: TypeSystemBounds>(
 
     // Bail out early if there are no traces
     // But we have examples to work off of
-    if traces.is_empty() && !hole.is_empty() {
+    if traces.is_empty() && !hole.get_positive_examples().is_empty() {
         info!("No traces to propagate from");
         return None;
     }
@@ -186,17 +186,30 @@ fn top_down_prop<T: TypeSystemBounds>(
         .filter(|f| f.contains_variable())
         .collect();
 
-/*     cfg_if::cfg_if! {
-        if #[cfg(debug_assertions)] { */
-            let synthesis_state = SynthesizerState::new(&ecta, inverse_map, &bool_fragments, signature, fragment_collection, type_map, top_node);
-/*         } else {
+    /*     cfg_if::cfg_if! {
+    if #[cfg(debug_assertions)] { */
+    let synthesis_state = SynthesizerState::new(
+        &ecta,
+        inverse_map,
+        &bool_fragments,
+        signature,
+        fragment_collection,
+        type_map,
+        top_node,
+    );
+    /*         } else {
             let synthesis_state = SynthesizerState::new(&ecta, inverse_map, &bool_fragments, signature, fragment_collection, type_map);
         }
     } */
 
     let prog_iter = deduce2(synthesis_state, top_node, hole.clone(), target_type);
 
-    prog_iter.filter(|p| p.passes_all_test_cases(&hole))
+    prog_iter.filter(|p| {
+        hole.is_consistent_with(|t| {
+            p.interpret(&t.into(), p)
+                .map_or(false, |output| output == t.output)
+        })
+    })
 }
 
 pub fn synthesis<T: TypeSystemBounds>(
@@ -232,7 +245,7 @@ pub fn synthesis<T: TypeSystemBounds>(
     let type_map = TypeMap::new(l);
 
     while size > 1 {
-        frags.increment(l, &tests);
+        frags.increment(l, &tests.get_all_examples());
         size -= 1;
     }
 
@@ -252,10 +265,22 @@ pub fn synthesis<T: TypeSystemBounds>(
 
         let complete_traces: Vec<_> = traces
             .iter()
-            .filter(|Fragment { behavior, .. }| tests.iter().all(|t| behavior.contains(t)))
+            .filter(|Fragment { fragment, .. }| {
+                tests.is_consistent_with(|t| {
+                    fragment
+                        .interpret(&t.into())
+                        .map_or(false, |output| output == t.output)
+                })
+            })
             .collect();
         if !complete_traces.is_empty() {
-            return Some(complete_traces.first().unwrap().fragment.clone().into());
+            info!("Found a complete trace");
+            return Some(
+                dbg!(complete_traces.first().unwrap())
+                    .fragment
+                    .clone()
+                    .into(),
+            );
         }
 
         // Synthesize candidates topdown propagation (with holes?)
@@ -264,7 +289,7 @@ pub fn synthesis<T: TypeSystemBounds>(
         {
             return Some(p);
         } else {
-            frags.increment(l, &tests);
+            frags.increment(l, &tests.get_all_examples());
             if frags.get_size() > MAX_FRAG_SIZE {
                 eprintln!("We failed to synthesize anything in a bound of size {MAX_FRAG_SIZE}");
                 return None;

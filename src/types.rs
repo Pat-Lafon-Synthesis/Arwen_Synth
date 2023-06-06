@@ -104,8 +104,8 @@ impl TypeSystemBounds for RefinementType {
         // "Prove" by doing the negation
 
         let x = RefinementType::prove(
-            &solver,
-            &sub_p.into_z3(&solver).implies(&super_p.into_z3(&solver)),
+            solver,
+            &sub_p.into_z3(solver).implies(&super_p.into_z3(solver)),
         );
         x
     }

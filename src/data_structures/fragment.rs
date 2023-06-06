@@ -1,9 +1,10 @@
-use std::{collections::HashMap, fmt::Display, num::NonZeroU8};
+use std::{collections::HashMap, fmt::Display, num::NonZeroU8, rc::Rc};
 
 use itertools::Itertools;
 
 use crate::{
-    language::{Examples, LinearProgram, LinearProgramNode},
+    language::{Constant, Examples, LinearProgram, LinearProgramNode},
+    types::BaseType,
     Libraries, Operation, Signature, TestCase, TypeSystemBounds, Variable,
 };
 
@@ -91,7 +92,7 @@ impl<T: TypeSystemBounds> FragmentCollection<T> {
                         args: Vec::new(),
                     };
 
-                    let behavior = fragment.get_behavior(&testcases);
+                    let behavior = fragment.get_behavior(&testcases.get_all_examples());
 
                     Fragment {
                         size,
@@ -113,7 +114,7 @@ impl<T: TypeSystemBounds> FragmentCollection<T> {
                                 args: Vec::new(),
                             };
 
-                            let behavior = fragment.get_behavior(&testcases);
+                            let behavior = fragment.get_behavior(&testcases.get_all_examples());
 
                             Some(Fragment {
                                 size,
@@ -224,14 +225,106 @@ impl<T: TypeSystemBounds> FragmentCollection<T> {
     pub fn find_valid_traces(&self, exs: &Examples) -> Vec<&Fragment<T>> {
         self.inner
             .iter()
-            .filter(|Fragment { behavior, .. }| behavior.iter().any(|t| exs.contains(t)))
+            .filter(|Fragment { behavior, .. }| {
+                behavior
+                    .iter()
+                    .any(|t| exs.get_positive_examples().contains(t))
+            })
             .collect()
     }
 
     pub fn find_complete_trace(&self, exs: &Examples) -> Vec<&Fragment<T>> {
         self.inner
             .iter()
-            .filter(|Fragment { behavior, .. }| exs.iter().all(|t| behavior.contains(t)))
+            .filter(|Fragment { behavior, .. }| {
+                exs.get_positive_examples()
+                    .iter()
+                    .all(|t| behavior.contains(t))
+            })
             .collect()
     }
+}
+
+#[test]
+fn test_fragment_collection() {
+    let bool_lib = vec![
+        Operation {
+            name: "true".to_string(),
+            sig: Signature {
+                input: vec![],
+                output: BaseType::Bool,
+            },
+            code: Rc::new(|_: &Vec<_>| Ok(Constant::Bool(true))),
+        },
+        Operation {
+            name: "false".to_string(),
+            sig: Signature {
+                input: vec![],
+                output: BaseType::Bool,
+            },
+            code: Rc::new(|_| Ok(Constant::Bool(false))),
+        },
+        Operation {
+            name: "and".to_string(),
+            sig: Signature {
+                input: vec![BaseType::Bool, BaseType::Bool],
+                output: BaseType::Bool,
+            },
+            code: Rc::new(|args| match (args.get(0).unwrap(), args.get(1).unwrap()) {
+                (Constant::Bool(b1), Constant::Bool(b2)) => Ok(Constant::Bool(*b1 && *b2)),
+                _ => panic!(),
+            }),
+        },
+        Operation {
+            name: "or".to_string(),
+            sig: Signature {
+                input: vec![BaseType::Bool, BaseType::Bool],
+                output: BaseType::Bool,
+            },
+            code: Rc::new(|args| match (args.get(0).unwrap(), args.get(1).unwrap()) {
+                (Constant::Bool(b1), Constant::Bool(b2)) => Ok(Constant::Bool(*b1 || *b2)),
+                _ => panic!(),
+            }),
+        },
+        Operation {
+            name: "not".to_string(),
+            sig: Signature {
+                input: vec![BaseType::Bool],
+                output: BaseType::Bool,
+            },
+            code: Rc::new(|args| match args.get(0).unwrap() {
+                Constant::Bool(b1) => Ok(Constant::Bool(!*b1)),
+                _ => panic!(),
+            }),
+        },
+    ];
+
+    let positive_examples = vec![TestCase {
+        inputs: vec![Constant::Bool(true)],
+        output: Constant::Bool(false),
+    }];
+
+    let negative_examples = vec![TestCase {
+        inputs: vec![Constant::Bool(false)],
+        output: Constant::Bool(false),
+    }];
+
+    let testcases = Examples::new(positive_examples, negative_examples);
+
+    let mut frags = FragmentCollection::new(
+        vec![Variable {
+            name: "arg0".to_string(),
+            ty: BaseType::Bool,
+        }],
+        &bool_lib,
+        testcases.clone(),
+    );
+
+    insta::assert_debug_snapshot!(frags);
+
+    frags.increment(&bool_lib, &testcases.get_all_examples());
+
+    insta::assert_debug_snapshot!(frags);
+
+    frags.increment(&bool_lib, &testcases.get_all_examples());
 }

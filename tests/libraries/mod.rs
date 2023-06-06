@@ -5,6 +5,7 @@ use arwen_synth::{
     types::{BaseType, Signature},
 };
 
+#[allow(dead_code)]
 pub fn bool_library() -> Vec<Operation<BaseType>> {
     vec![
         Operation {
@@ -59,6 +60,7 @@ pub fn bool_library() -> Vec<Operation<BaseType>> {
     ]
 }
 
+#[allow(dead_code)]
 pub fn nat_library() -> Vec<Operation<BaseType>> {
     vec![
         Operation {
@@ -139,6 +141,7 @@ pub fn nat_library() -> Vec<Operation<BaseType>> {
     ]
 }
 
+#[allow(dead_code)]
 pub fn list_library() -> Vec<Operation<BaseType>> {
     vec![
         Operation {

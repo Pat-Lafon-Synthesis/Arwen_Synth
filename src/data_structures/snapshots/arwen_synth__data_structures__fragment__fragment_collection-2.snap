@@ -1,0 +1,170 @@
+---
+source: src/data_structures/fragment.rs
+expression: frags
+---
+FragmentCollection {
+    size: 2,
+    inner: [
+        Fragment {
+            size: 1,
+            ty: Bool,
+            fragment: LinearProgram {
+                node: Variable(
+                    Variable {
+                        name: "arg0",
+                        ty: Bool,
+                    },
+                ),
+                args: [],
+            },
+            behavior: [
+                TestCase {
+                    inputs: [
+                        Bool(
+                            true,
+                        ),
+                    ],
+                    output: Bool(
+                        true,
+                    ),
+                },
+                TestCase {
+                    inputs: [
+                        Bool(
+                            false,
+                        ),
+                    ],
+                    output: Bool(
+                        false,
+                    ),
+                },
+            ],
+        },
+        Fragment {
+            size: 1,
+            ty: Bool,
+            fragment: LinearProgram {
+                node: Operation(
+                    Operation {
+                        name: "true",
+                        sig: Signature {
+                            input: [],
+                            output: Bool,
+                        },
+                    },
+                ),
+                args: [],
+            },
+            behavior: [
+                TestCase {
+                    inputs: [
+                        Bool(
+                            true,
+                        ),
+                    ],
+                    output: Bool(
+                        true,
+                    ),
+                },
+                TestCase {
+                    inputs: [
+                        Bool(
+                            false,
+                        ),
+                    ],
+                    output: Bool(
+                        true,
+                    ),
+                },
+            ],
+        },
+        Fragment {
+            size: 1,
+            ty: Bool,
+            fragment: LinearProgram {
+                node: Operation(
+                    Operation {
+                        name: "false",
+                        sig: Signature {
+                            input: [],
+                            output: Bool,
+                        },
+                    },
+                ),
+                args: [],
+            },
+            behavior: [
+                TestCase {
+                    inputs: [
+                        Bool(
+                            true,
+                        ),
+                    ],
+                    output: Bool(
+                        false,
+                    ),
+                },
+                TestCase {
+                    inputs: [
+                        Bool(
+                            false,
+                        ),
+                    ],
+                    output: Bool(
+                        false,
+                    ),
+                },
+            ],
+        },
+        Fragment {
+            size: 2,
+            ty: Bool,
+            fragment: LinearProgram {
+                node: Operation(
+                    Operation {
+                        name: "not",
+                        sig: Signature {
+                            input: [
+                                Bool,
+                            ],
+                            output: Bool,
+                        },
+                    },
+                ),
+                args: [
+                    LinearProgram {
+                        node: Variable(
+                            Variable {
+                                name: "arg0",
+                                ty: Bool,
+                            },
+                        ),
+                        args: [],
+                    },
+                ],
+            },
+            behavior: [
+                TestCase {
+                    inputs: [
+                        Bool(
+                            true,
+                        ),
+                    ],
+                    output: Bool(
+                        false,
+                    ),
+                },
+                TestCase {
+                    inputs: [
+                        Bool(
+                            false,
+                        ),
+                    ],
+                    output: Bool(
+                        true,
+                    ),
+                },
+            ],
+        },
+    ],
+}
