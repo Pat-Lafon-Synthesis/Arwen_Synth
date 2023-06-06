@@ -19,7 +19,7 @@ macro_rules! make_test {
                 synth_problem.sig.into(),
                 $($libs)*,
                 synth_problem.tests.tests.into(),
-                1,
+                3,
             );
             insta::assert_display_snapshot!(prog.unwrap());
         }

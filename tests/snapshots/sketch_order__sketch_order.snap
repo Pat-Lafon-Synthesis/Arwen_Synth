@@ -1,0 +1,10 @@
+---
+source: tests/sketch_order.rs
+expression: heap.to_string()
+---
+[
+	if (is_nil(arg0)) {O()} else {{} : Int}
+	if (is_cons(nil())) {O()} else {{} : Int}
+	if (is_zero(hd(arg0))) {O()} else {{} : Int}
+	if (is_cons(tail(tail(arg0)))) {O()} else {{} : Int}
+]

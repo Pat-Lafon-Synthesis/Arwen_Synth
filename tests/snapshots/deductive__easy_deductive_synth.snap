@@ -1,0 +1,5 @@
+---
+source: tests/deductive.rs
+expression: prog.unwrap()
+---
+zero()

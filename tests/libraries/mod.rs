@@ -62,6 +62,14 @@ pub fn bool_library() -> Vec<Operation<BaseType>> {
 pub fn nat_library() -> Vec<Operation<BaseType>> {
     vec![
         Operation {
+            name: "O".to_string(),
+            sig: Signature {
+                input: vec![],
+                output: BaseType::Int,
+            },
+            code: Rc::new(|_: &Vec<_>| Ok(Constant::Int(0))),
+        },
+        Operation {
             name: "is_zero".to_string(),
             sig: Signature {
                 input: vec![BaseType::Int],

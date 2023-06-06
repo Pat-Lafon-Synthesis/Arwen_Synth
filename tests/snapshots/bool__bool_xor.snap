@@ -2,4 +2,4 @@
 source: tests/bool.rs
 expression: prog.unwrap()
 ---
-and(or(not(arg0),not(arg1)),or(arg0,arg1))
+if (not(arg1)) {arg0} else {not(arg0)}

@@ -1,0 +1,39 @@
+---
+source: tests/ecta_conversion.rs
+expression: "ecta.get_dot(&[]).to_string()"
+---
+digraph {
+    0 [ label = "" ]
+    1 [ label = "" ]
+    2 [ label = "" ]
+    3 [ label = "" ]
+    4 [ label = "" ]
+    5 [ label = "" ]
+    6 [ label = "" ]
+    7 [ label = "" ]
+    1 -> 0 [ label = "bool_0" ]
+    2 -> 1 [ label = "arg0_0" ]
+    2 -> 1 [ label = "arg1_0" ]
+    3 -> 1 [ label = "arg0_0" ]
+    3 -> 1 [ label = "not_0" ]
+    3 -> 2 [ label = "not_1" ]
+    4 -> 1 [ label = "arg1_0" ]
+    5 -> 1 [ label = "arg0_0" ]
+    5 -> 1 [ label = "arg1_0" ]
+    5 -> 1 [ label = "not_0" ]
+    5 -> 4 [ label = "not_1" ]
+    6 -> 1 [ label = "arg0_0" ]
+    7 -> 1 [ label = "arg0_0" ]
+    7 -> 1 [ label = "arg1_0" ]
+    7 -> 1 [ label = "and_0" ]
+    7 -> 3 [ label = "and_1" ]
+    7 -> 5 [ label = "and_2" ]
+    7 -> 1 [ label = "false_0" ]
+    7 -> 1 [ label = "not_0" ]
+    7 -> 2 [ label = "not_1" ]
+    7 -> 1 [ label = "or_0" ]
+    7 -> 6 [ label = "or_1" ]
+    7 -> 4 [ label = "or_2" ]
+    7 -> 1 [ label = "true_0" ]
+}
+

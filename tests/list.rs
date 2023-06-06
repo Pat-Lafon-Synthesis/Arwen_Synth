@@ -8,7 +8,7 @@ use std::io::Read;
 
 macro_rules! make_test {
     ($test_name:tt, $($libs:tt)*) => {
-        #[test]
+        #[test_log::test]
         fn $test_name() {
             let mut file =
                 File::open(format!("tests/benchmarks/{}.mls", stringify!($test_name))).unwrap();
@@ -20,9 +20,9 @@ macro_rules! make_test {
                 synth_problem.sig.into(),
                 $($libs)*,
                 synth_problem.tests.tests.into(),
-                1,
+                3,
             );
-            insta::assert_display_snapshot!(prog.unwrap());
+            insta::assert_display_snapshot!(stringify!($test_name), prog.unwrap());
         }
     };
 }
@@ -35,7 +35,11 @@ make_test!(list_dropeven, &list_library());
 make_test!(list_even_parity, &list_library());
 make_test!(list_filter, &list_library());
 make_test!(list_fold, &list_library());
-make_test!(list_hd, &list_library());
+make_test!(list_hd, &{
+    let mut l = list_library();
+    l.extend(nat_library());
+    l
+});
 make_test!(list_inc, &list_library());
 make_test!(list_last, &list_library());
 make_test!(list_last2, &list_library());

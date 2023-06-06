@@ -2,4 +2,4 @@
 source: tests/nat.rs
 expression: prog.unwrap()
 ---
-if (is_zero(arg0)) {arg0} else {dec(arg0)}
+if (lt(arg0,arg1)) {arg1} else {arg0}

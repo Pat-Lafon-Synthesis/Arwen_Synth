@@ -15,6 +15,9 @@ ecta-rs = { git = "https://github.com/Pat-Lafon-Synthesis/ecta-rs.git" }
 z3 = { version = "0.11.2", features = ["static-link-z3"] }
 log = { version = "0.4", features = ["std"] }
 env_logger = "0.10.0"
+test-log = "0.2.11"
+cfg-if = "1.0.0"
+petgraph = "0.6.3"
 
 [dev-dependencies]
 criterion = "0.4"

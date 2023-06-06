@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use itertools::Itertools;
+use log::info;
 
 use crate::{
     language::{Constant, Examples},
@@ -28,8 +29,6 @@ impl<T: TypeSystemBounds> InverseMap<T> {
                 acc
             });
 
-        dbg!(&type_map);
-
         let temp_set = HashSet::new();
 
         let map: HashMap<Operation<T>, Vec<TestCase>> = l
@@ -44,7 +43,6 @@ impl<T: TypeSystemBounds> InverseMap<T> {
 
                 let tests: Vec<_> = args
                     .filter_map(|a| {
-                        dbg!(&a);
                         let inputs = a.into_iter().cloned().collect();
                         let output = o.execute(&inputs).ok()?;
                         Some(TestCase { inputs, output })
@@ -57,27 +55,45 @@ impl<T: TypeSystemBounds> InverseMap<T> {
         InverseMap { map }
     }
 
-    pub fn inverse_app(&self, o: &Operation<T>, hole: &Examples, idx: usize) -> Vec<Examples> {
+    /// Return a list of possible examples for a given index into the operation
+    pub fn inverse_app(
+        &self,
+        o: &Operation<T>,
+        hole: &Examples,
+        idx: usize,
+    ) -> Option<Vec<Examples>> {
+        info!("Computing inverse app for {o}");
+        // Get all the inverse semantics for the operation
         let inverse_semantics = self.map.get(o).unwrap();
 
-        hole.iter()
-            .map(|TestCase { inputs, output }| {
-                inverse_semantics
-                    .iter()
-                    .filter(|t| t.output == *output)
-                    .map(|x| {
-                        let new_inputs = inputs.clone();
-                        let new_output = x.inputs.get(idx).unwrap().clone();
-                        TestCase {
-                            inputs: new_inputs,
-                            output: new_output,
-                        }
-                    })
-                    .collect_vec()
-            })
-            .filter(|i| i.is_empty())
-            .multi_cartesian_product()
-            .map(|args| args.into())
-            .collect()
+        // Filter out the inverse semantics that don't match the given testcase in the example
+        let t_iter = hole.iter().map(|TestCase { inputs, output }| {
+            inverse_semantics
+                .iter()
+                .filter(|x| x.output == *output)
+                .map(|x| {
+                    let new_inputs = inputs.clone();
+                    let new_output = x.inputs.get(idx).unwrap().clone();
+                    TestCase {
+                        inputs: new_inputs,
+                        output: new_output,
+                    }
+                })
+                .collect_vec()
+        });
+
+        // If any of these didn't work out, then we don't have inverse semantics for one of the fuction arguments
+        if t_iter.clone().any(|i| i.is_empty()) {
+            info!("Inverse app is empty for {o}, {hole}");
+            return None;
+        }
+
+        // Given a nested list of possible testcases for each part of the example, combine them all together into as many example holes as needed
+        Some(
+            t_iter
+                .multi_cartesian_product()
+                .map(|args| args.into())
+                .collect(),
+        )
     }
 }

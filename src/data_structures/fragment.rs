@@ -3,16 +3,22 @@ use std::{collections::HashMap, fmt::Display, num::NonZeroU8};
 use itertools::Itertools;
 
 use crate::{
-    language::Examples, Libraries, Operation, Program, ProgramNode, Signature, TestCase,
-    TypeSystemBounds, Variable,
+    language::{Examples, LinearProgram, LinearProgramNode},
+    Libraries, Operation, Signature, TestCase, TypeSystemBounds, Variable,
 };
 
-#[derive(Debug, Clone, Eq)]
+#[derive(Debug, Clone)]
 pub struct Fragment<T: TypeSystemBounds> {
     size: NonZeroU8,
     pub ty: T,
-    pub fragment: Program<T>,
+    pub fragment: LinearProgram<T>,
     pub behavior: Vec<TestCase>,
+}
+
+impl<T: TypeSystemBounds> Fragment<T> {
+    pub fn contains_variable(&self) -> bool {
+        self.fragment.contains_variable()
+    }
 }
 
 impl<T: TypeSystemBounds> PartialEq for Fragment<T> {
@@ -20,6 +26,8 @@ impl<T: TypeSystemBounds> PartialEq for Fragment<T> {
         self.behavior == other.behavior
     }
 }
+
+impl<T: TypeSystemBounds> Eq for Fragment<T> {}
 
 impl<T: TypeSystemBounds> PartialOrd for Fragment<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -78,8 +86,8 @@ impl<T: TypeSystemBounds> FragmentCollection<T> {
             inner: vars
                 .into_iter()
                 .map(|ref v @ Variable { ref ty, .. }| {
-                    let fragment = Program {
-                        node: ProgramNode::Variable(v.clone(), ty.clone()),
+                    let fragment = LinearProgram {
+                        node: LinearProgramNode::Variable(v.clone()),
                         args: Vec::new(),
                     };
 
@@ -100,8 +108,8 @@ impl<T: TypeSystemBounds> FragmentCollection<T> {
                         if !input.is_empty() {
                             None
                         } else {
-                            let fragment = Program {
-                                node: ProgramNode::Operation(o.clone()),
+                            let fragment = LinearProgram {
+                                node: LinearProgramNode::Operation(o.clone()),
                                 args: Vec::new(),
                             };
 
@@ -187,8 +195,8 @@ impl<T: TypeSystemBounds> FragmentCollection<T> {
                             .collect()
                     })
                     .map(|args| {
-                        let fragment = Program {
-                            node: ProgramNode::Operation(o.clone()),
+                        let fragment = LinearProgram {
+                            node: LinearProgramNode::Operation(o.clone()),
                             args: args.into_iter().map(|f| f.fragment).collect(),
                         };
                         let behavior = fragment.get_behavior(testcases);
@@ -217,6 +225,13 @@ impl<T: TypeSystemBounds> FragmentCollection<T> {
         self.inner
             .iter()
             .filter(|Fragment { behavior, .. }| behavior.iter().any(|t| exs.contains(t)))
+            .collect()
+    }
+
+    pub fn find_complete_trace(&self, exs: &Examples) -> Vec<&Fragment<T>> {
+        self.inner
+            .iter()
+            .filter(|Fragment { behavior, .. }| exs.iter().all(|t| behavior.contains(t)))
             .collect()
     }
 }

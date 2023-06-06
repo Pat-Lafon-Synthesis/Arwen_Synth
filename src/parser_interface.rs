@@ -6,10 +6,10 @@ use program_synthesis_parser::lang::{
 
 use crate::{
     language::{Constant, TestCase},
-    types::{BaseType, Signature},
+    types::{BaseType, Signature, TypeSystemBounds},
 };
 
-pub fn parse(src: String) -> MySynthProblem {
+pub fn parse(src: String) -> MySynthProblem<BaseType> {
     let parser = program_synthesis_parser::spec::ProblemParser::new();
     parser.parse(&src).unwrap().into()
 }
@@ -109,8 +109,8 @@ impl From<&Example> for TestCase {
     }
 }
 
-pub struct MySynthProblem {
-    pub sig: Signature<BaseType>,
+pub struct MySynthProblem<T: TypeSystemBounds> {
+    pub sig: Signature<T>,
     pub tests: Examples,
 }
 
@@ -162,7 +162,7 @@ impl From<Type> for Signature<BaseType> {
     }
 }
 
-impl From<SynthProblem> for MySynthProblem {
+impl From<SynthProblem> for MySynthProblem<BaseType> {
     fn from(
         SynthProblem {
             imports: _,

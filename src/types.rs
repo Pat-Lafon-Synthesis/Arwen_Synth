@@ -13,12 +13,107 @@ use z3::{
 use crate::language::{Constant, InvalidProg};
 
 pub trait TypeSystemBounds:
-    PartialEq + Eq + Hash + Clone + Debug + PartialOrd + Ord + From<Constant> + Display
+    PartialEq
+    + Eq
+    + Hash
+    + Clone
+    + Debug
+    + PartialOrd
+    + Ord
+    + From<Constant>
+    + Display
+    + From<BaseType>
+    + Into<BaseType>
 {
+    fn is_closed(&self) -> bool;
+
+    fn plausible_subtype(sig: &Signature<Self>, other: &Self) -> bool {
+        if (&sig.output).into() != other.into() {
+            return false;
+        }
+
+        let cfg = Config::new();
+        let ctx = &Context::new(&cfg);
+        let solver = &Z3Solver::new(ctx);
+
+        let a = Int::new_const(ctx, "a");
+
+        solver.assert(&a._eq(&Int::from_i64(ctx, 0)));
+
+        sig.output.is_subtype_helper(other, solver)
+    }
+
+    fn is_subtype(&self, other: &Self) -> bool {
+        if self.into() != other.into() {
+            return false;
+        }
+
+        let cfg = Config::new();
+        let ctx = &Context::new(&cfg);
+        let solver = &Z3Solver::new(ctx);
+        self.is_subtype_helper(other, solver)
+    }
+
+    fn is_subtype_helper(&self, other: &Self, solver: &Z3Solver) -> bool;
+
+    fn is_non_trivial(&self) -> bool;
+
+    fn into(&self) -> &BaseType;
 }
 
-impl TypeSystemBounds for BaseType {}
-impl TypeSystemBounds for RefinementType {}
+impl TypeSystemBounds for BaseType {
+    fn is_closed(&self) -> bool {
+        true
+    }
+
+    fn is_subtype_helper(&self, other: &Self, _solver: &Z3Solver) -> bool {
+        self == other
+    }
+
+    fn is_non_trivial(&self) -> bool {
+        false
+    }
+
+    fn into(&self) -> &BaseType {
+        self
+    }
+}
+
+impl TypeSystemBounds for RefinementType {
+    fn into(&self) -> &BaseType {
+        &self.ty
+    }
+
+    fn is_closed(&self) -> bool {
+        self.p.is_closed(&TypeContext::new())
+    }
+
+    fn is_subtype_helper(
+        &self,
+        RefinementType {
+            ty: super_ty,
+            p: super_p,
+        }: &RefinementType,
+        solver: &Z3Solver,
+    ) -> bool {
+        let RefinementType { ty, p: sub_p } = self;
+
+        assert!(super_ty == ty);
+
+        // goal is to say that something implies something else
+        // "Prove" by doing the negation
+
+        let x = RefinementType::prove(
+            &solver,
+            &sub_p.into_z3(&solver).implies(&super_p.into_z3(&solver)),
+        );
+        x
+    }
+
+    fn is_non_trivial(&self) -> bool {
+        !matches!(self.p, Predicate::Bool(_))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub enum BaseType {
@@ -45,6 +140,17 @@ impl Display for BaseType {
 
 impl From<Constant> for BaseType {
     fn from(c: Constant) -> Self {
+        match c {
+            Constant::Int(_) => BaseType::Int,
+            Constant::Bool(_) => BaseType::Bool,
+            Constant::IntList(_) => BaseType::IntList,
+            Constant::IntTree(_) => BaseType::IntTree,
+        }
+    }
+}
+
+impl From<&Constant> for BaseType {
+    fn from(c: &Constant) -> Self {
         match c {
             Constant::Int(_) => BaseType::Int,
             Constant::Bool(_) => BaseType::Bool,
@@ -379,6 +485,23 @@ impl PredicateExpression {
             }
         }
     }
+
+    pub fn is_closed(&self, ctx: &TypeContext) -> bool {
+        match self {
+            PredicateExpression::Const(_) => true,
+            PredicateExpression::Var(v, ty) => ctx.contains(v, ty),
+            PredicateExpression::Plus(e1, e2)
+            | PredicateExpression::Sub(e1, e2)
+            | PredicateExpression::Mul(e1, e2) => e1.is_closed(ctx) && e2.is_closed(ctx),
+            PredicateExpression::ITE(b, t, e) => {
+                b.is_closed(ctx) && t.is_closed(ctx) && e.is_closed(ctx)
+            }
+            PredicateExpression::Func(f, args) => {
+                assert!(f.sig.input.len() == args.len());
+                args.iter().all(|a| a.is_closed(ctx))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -440,6 +563,43 @@ impl Predicate {
             Predicate::Neg(b) => b.into_z3(solver).not(),
         }
     }
+
+    pub fn is_closed(&self, ctx: &TypeContext) -> bool {
+        match self {
+            Predicate::Bool(_) => true,
+            Predicate::Equal(e1, e2) => e1.is_closed(ctx) && e2.is_closed(ctx),
+            Predicate::Less(e1, e2) => e1.is_closed(ctx) && e2.is_closed(ctx),
+            Predicate::Conj(e1, e2) => e1.is_closed(ctx) && e2.is_closed(ctx),
+            Predicate::Disj(e1, e2) => e1.is_closed(ctx) && e2.is_closed(ctx),
+            Predicate::Impl(e1, e2) => e1.is_closed(ctx) && e2.is_closed(ctx),
+            Predicate::Neg(e) => e.is_closed(ctx),
+        }
+    }
+}
+
+pub struct TypeContext {
+    map: HashMap<String, RefinementType>,
+}
+
+impl TypeContext {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+
+    pub fn contains(&self, v: &String, ty: &RefinementType) -> bool {
+        match self.map.get(v) {
+            Some(t) => t.is_subtype(ty),
+            None => false,
+        }
+    }
+}
+
+impl Default for TypeContext {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -465,34 +625,6 @@ impl RefinementType {
                 false
             }
         }
-    }
-
-    pub fn is_sub_type(
-        &self,
-        RefinementType {
-            ty: super_ty,
-            p: super_p,
-        }: &RefinementType,
-    ) -> bool {
-        let RefinementType {
-            ty: sub_ty,
-            p: sub_p,
-        } = self;
-        if sub_ty != super_ty {
-            return false;
-        }
-        let cfg = Config::new();
-        let ctx = &Context::new(&cfg);
-        let solver = Z3Solver::new(ctx);
-
-        // goal is to say that something implies something else
-        // "Prove" by doing the negation
-
-        let x = RefinementType::prove(
-            &solver,
-            &sub_p.into_z3(&solver).implies(&super_p.into_z3(&solver)),
-        );
-        x
     }
 }
 
@@ -612,10 +744,20 @@ impl From<RefinementType> for BaseType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Signature<T> {
     pub input: Vec<T>,
     pub output: T,
+}
+
+impl<T: TypeSystemBounds> PartialOrd for Signature<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(core::cmp::Ordering::Equal) => {}
+            ord => return ord,
+        }
+        self.output.partial_cmp(&other.output)
+    }
 }
 
 impl From<Signature<RefinementType>> for Signature<BaseType> {
@@ -650,8 +792,8 @@ mod tests {
             ty: BaseType::Int,
             p: Predicate::Bool(true),
         };
-        assert!(!ref1.is_sub_type(&ref2));
-        assert!(!ref2.is_sub_type(&ref1));
+        assert!(!ref1.is_subtype(&ref2));
+        assert!(!ref2.is_subtype(&ref1));
     }
 
     #[test]
@@ -664,8 +806,8 @@ mod tests {
             ty: BaseType::Int,
             p: Predicate::Bool(true),
         };
-        assert!(ref1.is_sub_type(&ref2));
-        assert!(ref2.is_sub_type(&ref1));
+        assert!(ref1.is_subtype(&ref2));
+        assert!(ref2.is_subtype(&ref1));
     }
 
     #[test]
@@ -678,8 +820,8 @@ mod tests {
             ty: BaseType::Int,
             p: Predicate::Bool(false),
         };
-        assert!(!ref1.is_sub_type(&ref2));
-        assert!(ref2.is_sub_type(&ref1));
+        assert!(!ref1.is_subtype(&ref2));
+        assert!(ref2.is_subtype(&ref1));
     }
 
     #[test]
@@ -698,8 +840,8 @@ mod tests {
                 PredicateExpression::Const(Constant::Int(6)).into(),
             ),
         };
-        assert!(ref1.is_sub_type(&ref2));
-        assert!(!ref2.is_sub_type(&ref1));
+        assert!(ref1.is_subtype(&ref2));
+        assert!(!ref2.is_subtype(&ref1));
     }
 
     #[test]
@@ -715,8 +857,8 @@ mod tests {
                 PredicateExpression::Const(Constant::Int(0)).into(),
             ),
         };
-        assert!(!ref1.is_sub_type(&ref2));
-        assert!(ref2.is_sub_type(&ref1));
+        assert!(!ref1.is_subtype(&ref2));
+        assert!(ref2.is_subtype(&ref1));
     }
 
     #[test]
@@ -745,10 +887,10 @@ mod tests {
                 .into(),
             ),
         };
-        assert!(ref1.is_sub_type(&ref2));
-        assert!(ref1.is_sub_type(&ref3));
-        assert!(!ref2.is_sub_type(&ref1));
-        assert!(!ref3.is_sub_type(&ref1));
+        assert!(ref1.is_subtype(&ref2));
+        assert!(ref1.is_subtype(&ref3));
+        assert!(!ref2.is_subtype(&ref1));
+        assert!(!ref3.is_subtype(&ref1));
     }
 
     #[test]
@@ -830,12 +972,85 @@ mod tests {
             ),
         };
 
-        assert!(ref1.is_sub_type(&ref1));
-        assert!(ref1.is_sub_type(&ref_1));
-        assert!(ref_1.is_sub_type(&ref1));
-        assert!(ref1.is_sub_type(&ref2));
-        assert!(!ref2.is_sub_type(&ref1));
-        assert!(!ref1.is_sub_type(&ref3));
-        assert!(!ref3.is_sub_type(&ref1));
+        assert!(ref1.is_subtype(&ref1));
+        assert!(ref1.is_subtype(&ref_1));
+        assert!(ref_1.is_subtype(&ref1));
+        assert!(ref1.is_subtype(&ref2));
+        assert!(!ref2.is_subtype(&ref1));
+        assert!(!ref1.is_subtype(&ref3));
+        assert!(!ref3.is_subtype(&ref1));
+    }
+
+    #[test]
+    fn signature_subtype1() {
+        let sig1 = Signature {
+            input: vec![RefinementType {
+                ty: BaseType::Int,
+                p: Predicate::Bool(true),
+            }],
+            output: RefinementType {
+                ty: BaseType::Int,
+                p: Predicate::Bool(true),
+            },
+        };
+        let ref1 = RefinementType {
+            ty: BaseType::Int,
+            p: Predicate::Bool(true),
+        };
+        assert!(TypeSystemBounds::plausible_subtype(&sig1, &ref1))
+    }
+
+    #[test]
+    fn signature_subtype2() {
+        let sig1 = Signature {
+            input: vec![RefinementType {
+                ty: BaseType::Int,
+                p: Predicate::Bool(true),
+            }],
+            output: RefinementType {
+                ty: BaseType::Int,
+                p: Predicate::Equal(
+                    PredicateExpression::Const(0.into()).into(),
+                    PredicateExpression::Var("v".to_string(), BaseType::Int.into()).into(),
+                ),
+            },
+        };
+        let ref1 = RefinementType {
+            ty: BaseType::Int,
+            p: Predicate::Equal(
+                PredicateExpression::Const(0.into()).into(),
+                PredicateExpression::Var("v".to_string(), BaseType::Int.into()).into(),
+            ),
+        };
+        assert!(TypeSystemBounds::plausible_subtype(&sig1, &ref1))
+    }
+
+    #[test]
+    fn signature_subtype3() {
+        let sig1 = Signature {
+            input: vec![RefinementType {
+                ty: BaseType::Int,
+                p: Predicate::Bool(true),
+            }],
+            output: RefinementType {
+                ty: BaseType::Int,
+                p: Predicate::Equal(
+                    PredicateExpression::Plus(
+                        PredicateExpression::Var("a".to_string(), BaseType::Int.into()).into(),
+                        PredicateExpression::Const(1.into()).into(),
+                    )
+                    .into(),
+                    PredicateExpression::Var("v".to_string(), BaseType::Int.into()).into(),
+                ),
+            },
+        };
+        let ref1 = RefinementType {
+            ty: BaseType::Int,
+            p: Predicate::Equal(
+                PredicateExpression::Const(1.into()).into(),
+                PredicateExpression::Var("v".to_string(), BaseType::Int.into()).into(),
+            ),
+        };
+        assert!(TypeSystemBounds::plausible_subtype(&sig1, &ref1))
     }
 }

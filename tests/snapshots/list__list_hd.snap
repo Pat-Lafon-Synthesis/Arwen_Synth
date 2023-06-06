@@ -1,0 +1,5 @@
+---
+source: tests/list.rs
+expression: prog.unwrap()
+---
+if (is_nil(arg0)) {O()} else {hd(arg0)}
