@@ -1,11 +1,9 @@
 use arwen_synth::{
     data_structures::create_ecta_from_traces,
-    language::{LinearProgram, LinearProgramNode, Variable},
-    types::BaseType,
+    language::{BaseType, LinearProgram, LinearProgramNode, Variable},
+    libraries::*,
 };
 use ecta_rs::ECTA;
-mod libraries;
-use libraries::*;
 use log::info;
 
 #[test_log::test]

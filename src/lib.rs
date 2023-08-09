@@ -6,8 +6,8 @@
 
 pub mod data_structures;
 pub mod language;
+pub mod libraries;
 pub mod parser_interface;
-pub mod types;
 
 use log::{info, warn};
 use std::fmt::Display;
@@ -16,12 +16,11 @@ use std::num::NonZeroU8;
 
 use data_structures::*;
 use language::*;
-use types::*;
 
 use ecta_rs::{ECTANode, Edge, ECTA};
 
 const IF_DEPTH: usize = 1;
-const MAX_FRAG_SIZE: NonZeroU8 = NonZeroU8::new(3).unwrap();
+const MAX_FRAG_SIZE: NonZeroU8 = NonZeroU8::new(4).unwrap();
 
 type Libraries<T> = Vec<Operation<T>>;
 
@@ -135,7 +134,7 @@ fn deduce2<T: TypeSystemBounds>(
                 info!("Complete sketch = {s}");
                 return s.try_into().ok();
             } else {
-                info!("Pushed sketch onto the queue = {s}");
+                /* info!("Pushed sketch onto the queue = \n{s}"); */
                 queue.push(s);
             }
         }
@@ -202,14 +201,25 @@ fn top_down_prop<T: TypeSystemBounds>(
         }
     } */
 
-    let prog_iter = deduce2(synthesis_state, top_node, hole.clone(), target_type);
+    let prog = deduce2(synthesis_state, top_node, hole.clone(), target_type);
 
-    prog_iter.filter(|p| {
-        hole.is_consistent_with(|t| {
-            p.interpret(&t.into(), p)
-                .map_or(false, |output| output == t.output)
-        })
-    })
+    if prog.is_none() {
+        info!("deduce failed");
+        return None;
+    }
+
+    let prog = prog.unwrap();
+
+    if hole.is_consistent_with(|t| {
+        prog.interpret(&t.into(), &prog)
+            .map_or(false, |output| output == t.output)
+    }) {
+        info!("Program was deduced and consistent");
+        Some(prog)
+    } else {
+        info!("Program was duduced but not consistent");
+        None
+    }
 }
 
 pub fn synthesis<T: TypeSystemBounds>(
@@ -250,7 +260,7 @@ pub fn synthesis<T: TypeSystemBounds>(
     }
 
     info!("Starting synthesis...");
-    info!("Incoming tests = {:#?}", tests);
+    info!("Incoming tests = {}", tests);
 
     loop {
         info!("Sample the libraries");
@@ -275,12 +285,7 @@ pub fn synthesis<T: TypeSystemBounds>(
             .collect();
         if !complete_traces.is_empty() {
             info!("Found a complete trace");
-            return Some(
-                dbg!(complete_traces.first().unwrap())
-                    .fragment
-                    .clone()
-                    .into(),
-            );
+            return Some(complete_traces.first().unwrap().fragment.clone().into());
         }
 
         // Synthesize candidates topdown propagation (with holes?)

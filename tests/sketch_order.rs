@@ -2,13 +2,10 @@ use std::vec;
 
 use arwen_synth::{
     data_structures::MinHeap,
-    language::{Program, ProgramNode, Sketch, Variable},
-    types::BaseType,
+    language::{BaseType, Program, ProgramNode, Sketch, Variable},
+    libraries::*,
 };
 use log::info;
-
-mod libraries;
-use libraries::*;
 
 #[test_log::test]
 fn sketch_order() {

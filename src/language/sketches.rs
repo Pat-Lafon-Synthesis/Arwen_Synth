@@ -1,13 +1,13 @@
-use std::{fmt::Display, iter::once};
+use std::{collections::HashMap, fmt::Display, iter::once};
 
 use ecta_rs::ECTANode;
 use itertools::Itertools;
-use log::info;
+use log::{info, warn};
 
 use crate::{
     data_structures::{Fragment, InverseMap, MinHeap, SynthCostFunc},
-    types::{BaseType, RefinementType, TypeSystemBounds},
-    SynthEcta, SynthEctaEdge, SynthEdge, SynthesizerState, IF_DEPTH,
+    BaseType, RefinementType, SynthEcta, SynthEctaEdge, SynthesizerState, TypeSystemBounds,
+    IF_DEPTH,
 };
 
 use super::{
@@ -28,7 +28,301 @@ pub enum Sketch<T: TypeSystemBounds> {
 }
 
 impl<T: TypeSystemBounds> Sketch<T> {
-    fn is_example_consistent_helper(
+    /// A second, hopefully cleaner attempt at example and block consistency
+    /// Think of this like a symbolic interpreter
+    fn symbolic_block_based_evaluator(
+        &self,
+        e: &Examples,
+        state: &SynthesizerState<T>,
+        current_node: ECTANode,
+        full_sketch: &Self,
+    ) -> bool {
+        /*         info!("Sketch in symbolic evaluator: {self}");
+        info!("Current_node in symbolic evaluator: {current_node:?}"); */
+        self.symbolic_block_based_evaluator_helper(
+            e,
+            state,
+            current_node,
+            full_sketch,
+            None,
+            &mut HashMap::new(),
+        )
+    }
+
+    fn symbolic_block_based_evaluator_helper(
+        &self,
+        e: &Examples,
+        state: &SynthesizerState<T>,
+        current_node: ECTANode,
+        full_sketch: &Self,
+        last_rec_arg: Option<&Constant>,
+        // Hold lazy evaluation of arguments to operations
+        env: &mut HashMap<String, LinearProgram<T>>,
+    ) -> bool {
+        // Should examples be non-empty?
+        // Maybe only when we are not in a recursive call?
+        if e.is_empty() {
+            warn!("For the moment we are allow empty sets of examples");
+            info!("\t{self}\n\t{full_sketch}");
+            return true;
+        }
+
+        // Enforcing block consistency so can't be outside of the ECTA
+        assert!(current_node != state.ecta.empty_node);
+        match self {
+            Sketch::Hole(_) => {
+                // There is a question about reachability
+                // Given that this hole could be filled with anything, is there any set of output values that would not be reconcilable with this hole
+                // I think the answer is no, because the set of reachable constants is explored starting with input variables and grown via each of the components.
+                // Thus the only way we know about a constant is if we reached it during fragment creation.
+                true
+            }
+            Sketch::Constant(c) => {
+                // This seems pretty easy
+                // All examples should just return the output constant
+                // And I guess the constant should be in the block
+                if !e.is_consistent_with(|TestCase { output, .. }| output == c) {
+                    /* info!("We rejected a sketch because the constants didn't line up with the test cases"); */
+                    false
+                } else if LinearProgramNode::Constant(c.clone())
+                    .ecta_next_program_nodes(state.ecta, current_node)
+                    .is_none()
+                {
+                    /* info!("We rejected a sketch because the constant was not in the ecta"); */
+                    false
+                } else {
+                    true
+                }
+            }
+            Sketch::Variable(v @ Variable { name, .. }) => {
+                // The variable ends up being a little trickier because we should check the enviroment first
+                if let Some(p) = env.get(name) {
+                    Sketch::from(p.clone()).symbolic_block_based_evaluator_helper(
+                        e,
+                        state,
+                        current_node,
+                        full_sketch,
+                        last_rec_arg,
+                        env,
+                    )
+                } else {
+                    if !e.is_consistent_with(|t| {
+                        Into::<Environment<T>>::into(t)
+                            .get(v)
+                            .map(|c| c == &t.output)
+                            .unwrap_or(false)
+                    }) {
+                        /* info!("We rejected a sketch because the variable didn't line up with the test cases"); */
+                        false
+                    } else if LinearProgramNode::Variable(v.clone())
+                        .ecta_next_program_nodes(state.ecta, current_node)
+                        .is_none()
+                    {
+                        /* info!("We rejected a sketch because the variable was not in the ecta"); */
+                        false
+                    } else {
+                        true
+                    }
+                }
+            }
+            Sketch::If(b, s1, s2) => {
+                let b = b.substitute(env);
+                if !b.get_behavior(e.get_positive_examples()).len()
+                    == e.get_positive_examples().len()
+                {
+                    /* info!("We rejected a sketch because the behaviour of the positive examples was incomplete"); */
+                    false
+                } else if !b.get_behavior(e.get_negative_examples()).len()
+                    == e.get_negative_examples().len()
+                {
+                    /* info!("We rejected a sketch because the behaviour of the negative examples was incomplete"); */
+                    false
+                } else if !s1.symbolic_block_based_evaluator_helper(
+                    &e.filter_behavior_p(&b, &|c| c == &Constant::Bool(true)),
+                    state,
+                    current_node,
+                    full_sketch,
+                    last_rec_arg,
+                    env,
+                ) {
+                    /* info!("We rejected a sketch because the positive branch was not consistent"); */
+                    false
+                } else if !s2.symbolic_block_based_evaluator_helper(
+                    &e.filter_behavior_p(&b, &|c| c == &Constant::Bool(false)),
+                    state,
+                    current_node,
+                    full_sketch,
+                    last_rec_arg,
+                    env,
+                ) {
+                    /* info!("We rejected a sketch because the negative branch was not consistent: {full_sketch}"); */
+                    false
+                } else {
+                    true
+                }
+            }
+            Sketch::Operation(o, args) => {
+                // Maybe the operation is fully complete
+                if let Ok(p) =
+                    // todo Patrick for real, You need to worry about Rec here, only do linear where you can solve it immediately
+                    TryInto::<Program<T>>::try_into(self.clone())
+                        .and_then(|p| TryInto::<LinearProgram<T>>::try_into(p))
+                {
+                    if !e.is_consistent_with(|t @ TestCase { output, .. }| {
+                        if let Ok(c) = p.interpret(&t.into()) {
+                            c == *output
+                        } else {
+                            false
+                        }
+                    }) {
+                        /* info!("We rejected a sketch because the operation didn't line up with the test cases"); */
+                        false
+                    } else {
+                        // There is nothing more to synthesize here so we are probably fine block-consistencywise
+                        true
+                    }
+                } else {
+                    // There are still holes in the sketch
+                    let product_vec_examples = e.witness_examples(o, state.inverse_map);
+                    if product_vec_examples.is_none() {
+                        /* info!("We rejected a sketch because it didn't have a complete inverse semantics: {self}"); */
+                        return false;
+                    }
+
+                    let product_vec_examples = product_vec_examples.unwrap();
+
+                    if let Some(edges) = LinearProgramNode::Operation(o.clone())
+                        .ecta_next_program_nodes(state.ecta, current_node)
+                    {
+                        let res = args.iter().enumerate().zip(product_vec_examples).all(
+                            |((idx, a), e_vec)| {
+                                e_vec.into_iter().any(|e_single| {
+                                    a.symbolic_block_based_evaluator_helper(
+                                        &e_single,
+                                        state,
+                                        edges[idx],
+                                        full_sketch,
+                                        last_rec_arg,
+                                        env,
+                                    )
+                                })
+                            },
+                        );
+                        if !res {
+                            /* info!("We rejected a sketch because the arguments were not consistent {self}"); */
+                        }
+                        res
+                    } else {
+                        /* info!("We rejected a sketch because of a lack of traces: {self}");
+                        info!("{e}");
+                        info!("{:?}", state.start_node);
+                        info!("{}", o.name);
+                        info!("{current_node:?}");
+                        info!("{}", state.ecta.get_dot(&[])); */
+                        false
+                    }
+                }
+            }
+            Sketch::Rec(_t, args) => {
+                // Convert args from sketches to programs
+                let processed_args: Vec<LinearProgram<T>> = args.into_iter().map(|s| s.clone().try_into().unwrap())
+                // Substitute in an the environment
+                .map(|p: Program<T>| p.substitute(env))
+                // Convert from programs to linear programs
+                .map(|p| p.try_into().unwrap()).collect();
+                // Check that given the current examples, all input values are valid
+                if processed_args
+                    .iter()
+                    .try_for_each(|l| {
+                        if e.is_consistent_with(|t| {
+                            l.interpret(&Into::<Environment<T>>::into(t)).is_ok()
+                        }) {
+                            Ok(())
+                        } else {
+                            eprintln!(
+                                "Inconsistency in recursive arguments:\n\t {full_sketch}\n\t{e:?}"
+                            );
+                            Err(())
+                        }
+                    })
+                    .err()
+                    .is_some()
+                {
+                    /* info!(
+                        "We rejected a sketch because the recursive arguments were not consistent"
+                    ); */
+                    return false;
+                }
+                let helper = |tests: &[TestCase]| {
+                    tests
+                        .iter()
+                        .map(|t @ TestCase { output, .. }| {
+                            let env = Into::<Environment<T>>::into(t);
+                            let new_inputs = processed_args
+                                .iter()
+                                .map(|l| l.interpret(&env).unwrap())
+                                .collect_vec();
+                            TestCase {
+                                inputs: new_inputs,
+                                output: output.clone(),
+                            }
+                        })
+                        .collect()
+                };
+
+                // Create new examples
+                let new_examples = Examples::new(
+                    helper(e.get_positive_examples()),
+                    helper(e.get_negative_examples()),
+                );
+
+                // And are decreasing?
+                // todo, all examples or just the positive ones?
+                let rec_arg = new_examples
+                    .get_positive_examples()
+                    .iter()
+                    .map(|TestCase { inputs, .. }| &inputs[0])
+                    .max()
+                    .unwrap();
+
+                let new_rec_arg = if let Some(r) = last_rec_arg {
+                    if r < &rec_arg {
+                        /* info!("We rejected a rec sketch because it didn't have a decreasing semantics: {self}"); */
+                        return false;
+                    } else {
+                        Some(rec_arg)
+                    }
+                } else {
+                    Some(rec_arg)
+                };
+
+                let mut new_env = processed_args
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, val)| (format!("args{i}"), val))
+                    .collect();
+
+                /* info!(
+                    "Current state: {}",
+                    format!("{full_sketch}\n{e}\n{new_examples}\n{current_node:?}\n\n")
+                ); */
+
+                // All the examples have the corresponding outputs we are looking for I think
+                full_sketch.symbolic_block_based_evaluator_helper(
+                    &new_examples,
+                    state,
+                    current_node,
+                    full_sketch,
+                    new_rec_arg,
+                    &mut new_env,
+                )
+            }
+        }
+    }
+}
+
+impl<T: TypeSystemBounds> Sketch<T> {
+    /* fn is_example_consistent_helper(
         &self,
         e: &Examples,
         state: &SynthesizerState<T>,
@@ -36,7 +330,6 @@ impl<T: TypeSystemBounds> Sketch<T> {
         full_sketch: (&Self, &Examples),
         last_rec_arg: Option<&Constant>,
     ) -> bool {
-        //info!("Checking consistency of {self} with {e}");
         match self {
             Sketch::Hole(_) => {
                 let res = current_node != state.ecta.empty_node;
@@ -124,12 +417,39 @@ impl<T: TypeSystemBounds> Sketch<T> {
                         last_rec_arg
                     )
             }
-            Sketch::Rec(_t, _args) => {
+            Sketch::Rec(_t, args) => {
                 info!("Check that rec is consistent");
-                info!("TODO: returning false");
-                info!("Rec being consistent means that the first arg is always decreasing also");
-                //todo!();
-                false
+
+                let p = TryInto::<Program<T>>::try_into(args[0].clone()).unwrap();
+                let first_args = e
+                    .get_positive_examples()
+                    .iter()
+                    .map(|t| p.interpret(&t.into(), &p).ok())
+                    .collect_vec();
+
+                if first_args.iter().any(|x| x.is_none()) {
+                    info!("We rejected a rec sketch because it was invalid for it's recursive argument(the first arg): {self}");
+                    return false;
+                }
+
+                // todo I did the simple thing that says that one example upper bounds all the others, and I need to ensure that the the upper bound is always decreasing
+                let rec_arg = first_args
+                    .into_iter()
+                    .map(|x| x.unwrap())
+                    .max_by(|x, y| match (x, y) {
+                        (Constant::Int(x), Constant::Int(y)) => x.cmp(y),
+                        (Constant::IntList(x), Constant::IntList(y)) => x.len().cmp(&y.len()),
+                        (Constant::IntTree(x), Constant::IntTree(y)) => x.height().cmp(&y.height()),
+                        _ => todo!(),
+                    })
+                    .unwrap();
+                if last_rec_arg.is_some() && last_rec_arg.unwrap() < &rec_arg {
+                    info!("We rejected a rec sketch because it didn't have a decreasing semantics: {self}");
+                    return false;
+                }
+
+                info!("TODO: we could do something smarter to ensure example consistency");
+                true
             }
         }
     }
@@ -142,7 +462,7 @@ impl<T: TypeSystemBounds> Sketch<T> {
         full_sketch: (&Self, &Examples),
     ) -> bool {
         self.is_example_consistent_helper(e, state, current_node, full_sketch, None)
-    }
+    } */
 }
 
 impl From<&Sketch<BaseType>> for BaseType {
@@ -212,6 +532,12 @@ impl<T: TypeSystemBounds> From<Program<T>> for Sketch<T> {
                 )
             }
         }
+    }
+}
+
+impl<T: TypeSystemBounds> From<LinearProgram<T>> for Sketch<T> {
+    fn from(value: LinearProgram<T>) -> Self {
+        Program::from(value).into()
     }
 }
 
@@ -490,12 +816,12 @@ impl<T: TypeSystemBounds> HoleMetaData<T> {
             })
             .collect_vec();
         res.iter()
-            .for_each(|s| dbg!(s).assert_valid_state(state.ecta, self.nodeid));
+            .for_each(|s| s.assert_valid_state(state.ecta, self.nodeid));
         res
     }
 
     fn deductive_synthesis(&self, state: &SynthesizerState<T>) -> Vec<SketchWithData<T>> {
-        info!("Attempting deductive synthesis");
+        /* info!("Attempting deductive synthesis"); */
 
         let res = state
             .type_map
@@ -522,7 +848,7 @@ impl<T: TypeSystemBounds> HoleMetaData<T> {
 
         // todo: create if statements
 
-        info!("Deductive synthesis produced {} sketches", res.len());
+        /* info!("Deductive synthesis produced {} sketches", res.len()); */
 
         res
     }
@@ -537,7 +863,20 @@ pub struct SketchWithData<T: TypeSystemBounds> {
 
 impl<T: TypeSystemBounds> Display for SketchWithData<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{}", self.sketch)
+        writeln!(
+            f,
+            "{}: {}",
+            self.sketch,
+            self.holes
+                .clone()
+                .into_iter()
+                .map(|h: HoleMetaData<_>| format!(
+                    "\n\t{}\n\t{:?}",
+                    h.examples.get_positive_examples().iter().join(", "),
+                    h.examples.get_negative_examples().iter().join(", ")
+                ))
+                .join(", ")
+        )
     }
 }
 
@@ -605,9 +944,9 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
         from_deductive: bool, // This boolean flag means that we will turn off some assertsions that are not true for deductive synthesis like checking for edges... If they are there, great, but not the end of the world
     ) -> Vec<Self> {
         if o.sig.input.is_empty() {
-            info!("No arguments in this sketch");
+            /* info!("No arguments in this sketch"); */
             return vec![Self {
-                sketch: Sketch::Operation(o, Vec::new()),
+                sketch: Sketch::Operation(o.clone(), Vec::new()),
                 holes: MinHeap::new(),
             }];
         }
@@ -619,22 +958,23 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
             .map(|t| Sketch::Hole(t.clone()))
             .collect();
 
-        let examples_vec: Option<Vec<Vec<Examples>>> =
-            holedata.examples.witness_examples(&o, inverse_map);
+        let examples_vec: Option<Vec<Vec<Examples>>> = holedata
+            .examples
+            .propogate_operation_examples(&o, inverse_map);
+        /* holedata.examples.witness_examples(&o, inverse_map); */
 
         if examples_vec.is_none() {
-            info!("Examples_vec is none");
+            /* info!("Examples_vec is none"); */
             return Vec::new();
         }
 
         let examples_vec = examples_vec.unwrap();
 
-        assert!(examples_vec.len() == args.len());
-
         assert!(!examples_vec.iter().any(|v| v.is_empty()));
-        assert!(edges.len() == o.sig.input.len() + 1);
 
-        assert!(o.sig.input.len() == examples_vec.len());
+        // We skip one on the edges because the first edge has to do with the node type
+        assert!(edges.len() == o.sig.input.len() + 1);
+        assert!(args.len() == o.sig.input.len());
 
         examples_vec
             .into_iter()
@@ -657,6 +997,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                     })
                     .collect();
                 assert!(!holes.is_empty());
+                assert!(args.len() == holes.len());
                 SketchWithData {
                     sketch: Sketch::Operation(o.clone(), args.clone()),
                     holes,
@@ -670,6 +1011,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
     fn sketch_constructor(
         self,
         path: Vec<u8>,
+        is_recursable: bool,
     ) -> impl Fn(SketchWithData<T>) -> SketchWithData<T> + 'a {
         move |x| -> SketchWithData<T> {
             let path = path.clone();
@@ -679,6 +1021,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                 x: SketchWithData<T>,
                 mut path: Vec<u8>,
                 sketch: Sketch<T>,
+                is_recursable: bool,
             ) -> SketchWithData<T> {
                 if path.is_empty() {
                     assert!(matches!(sketch, Sketch::Hole(_)));
@@ -689,7 +1032,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                         Sketch::Hole(_) | Sketch::Constant(_) | Sketch::Variable(..) => panic!(),
                         Sketch::Operation(o, mut args) => {
                             let SketchWithData { sketch, holes } =
-                                helper(x, path, args[i as usize].clone());
+                                helper(x, path, args[i as usize].clone(), is_recursable);
                             args[i as usize] = sketch;
 
                             let holes = holes.into_iter().map(|h| h.add_depth(i)).collect();
@@ -701,7 +1044,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                         }
                         Sketch::Rec(t, mut args) => {
                             let SketchWithData { sketch, holes } =
-                                helper(x, path, args[i as usize].clone());
+                                helper(x, path, args[i as usize].clone(), is_recursable);
                             args[i as usize] = sketch;
 
                             let holes = holes.into_iter().map(|h| h.add_depth(i)).collect();
@@ -718,7 +1061,8 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                                     unreachable!()
                                 }
                                 1 => {
-                                    let SketchWithData { sketch, holes } = helper(x, path, *t1);
+                                    let SketchWithData { sketch, holes } =
+                                        helper(x, path, *t1, is_recursable);
                                     *t1 = sketch;
                                     (
                                         holes
@@ -730,13 +1074,19 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                                     )
                                 }
                                 2 => {
-                                    let SketchWithData { sketch, holes } = helper(x, path, *f1);
+                                    let SketchWithData { sketch, holes } =
+                                        helper(x, path, *f1, is_recursable);
                                     *f1 = sketch;
                                     (
                                         holes
                                             .into_iter()
                                             .map(|h: HoleMetaData<_>| {
-                                                h.add_depth(2).inc_if().allow_recursion()
+                                                let tmp = h.add_depth(2).inc_if();
+                                                if is_recursable {
+                                                    tmp.allow_recursion()
+                                                } else {
+                                                    tmp
+                                                }
                                             })
                                             .collect(),
                                         t1,
@@ -754,7 +1104,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                     }
                 }
             }
-            let mut x = helper(x, path, sketch);
+            let mut x = helper(x, path, sketch, is_recursable);
             x.holes.extend(other_holes);
             x
         }
@@ -769,6 +1119,14 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
             .bool_fragments
             .iter()
             .filter_map(|b| {
+                // Rule out any conditions that don't evaluate correctly on a test case
+                if !holedata
+                    .examples
+                    .is_consistent_with(|t| b.fragment.interpret(&t.into()).is_ok())
+                {
+                    return None;
+                }
+
                 // The sketch on then left branch might be complete
                 // In which case it is fine that it didn't have any holes
                 let true_holes = if self.holes.is_empty() {
@@ -793,19 +1151,26 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                         .collect();
 
                     if true_holes.is_empty() {
-                        info!("Ruled out sketch because no examples for true branch");
+                        /* info!("Ruled out sketch because no examples for true branch"); */
                         return None;
                     }
                     true_holes
                 };
 
-                let mut false_hole = holedata.clone().set_false_hole().inc_if().allow_recursion();
+                let mut false_hole = holedata.clone().set_false_hole().inc_if();
+
+                false_hole = if state.sig.is_recursable() {
+                    false_hole.allow_recursion()
+                } else {
+                    false_hole
+                };
+
                 false_hole.examples = false_hole
                     .examples
                     .filter_behavior(&b.fragment, |c| c == &Constant::Bool(false));
 
                 if false_hole.examples.get_positive_examples().is_empty() {
-                    info!("Ruled out sketch because no examples for false branch");
+                    /* info!("Ruled out sketch because no examples for false branch"); */
                     return None;
                 }
 
@@ -835,12 +1200,15 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
         self.assert_valid_state(state.ecta, state.start_node);
 
         let holedata = self.holes.pop().unwrap();
-        info!("Current holedata: {holedata:?}");
+        /* info!("Current holedata: {holedata:?}"); */
 
         // walk to the hole,
         // then construct new ones with the hole filled(possibly with new holes)
-        let f = self.clone().sketch_constructor(holedata.path.clone());
+        let f = self
+            .clone()
+            .sketch_constructor(holedata.path.clone(), state.sig.is_recursable());
 
+        // Check if we already have a solution for this hole from the traces
         if let Some(frag) = state
             .fragment_collection
             .find_complete_trace(&holedata.examples)
@@ -850,12 +1218,14 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
             .collect::<MinHeap<LinearProgram<T>>>()
             .pop()
         {
-            info!("Found complete fragment for hole: {frag}");
+            /* info!("Found complete fragment for hole: {frag}"); */
             return vec![f(frag.into())];
         }
 
+        // Get possible candidates from the ecta
         let mut candidates = holedata.get_edge_candidates(state);
 
+        // Todo what is this doing again?
         candidates.iter().for_each(|s| {
             if s.is_complete() {
                 let _: Program<T> = s.sketch.clone().try_into().unwrap();
@@ -869,7 +1239,7 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
         }
 
         if deductive_candidates.is_empty() {
-            info!("No deductive candidates to fill hole of {self}");
+            /* info!("No deductive candidates to fill hole"); */
         } else {
             info!(
                 "Deductive hole filling candidates: \n{}",
@@ -886,14 +1256,14 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
             return deductive_candidates;
         }
 
-        info!(
+        /*         info!(
             "Hole filling candidates: \n{}",
             candidates
                 .iter()
                 .map(ToString::to_string)
                 .collect_vec()
                 .join("")
-        );
+        ); */
 
         /* #[cfg(debug_assertions)] */
         candidates
@@ -911,16 +1281,15 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
         };
 
         if holedata.recursion_allowed {
-            candidates.push(SketchWithData::create_rec_sketch(state, &holedata))
+            candidates.extend(SketchWithData::create_rec_sketch(state, &holedata))
         }
 
         info!(
             "Hole filling candidates with control flow: \n{}",
-            candidates
-                .iter()
-                .map(ToString::to_string)
-                .collect_vec()
-                .join("")
+            candidates.len() /*                 .iter()
+                             .map(ToString::to_string)
+                             .collect_vec()
+                             .join("") */
         );
 
         /* #[cfg(debug_assertions)] */
@@ -928,31 +1297,29 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
             .iter()
             .for_each(|s| s.assert_valid_state(state.ecta, holedata.nodeid));
 
-        info!("Examples: {}", holedata.examples);
+        /* info!("Examples: {}", holedata.examples); */
 
-        // todo: sketch consistency is not checked with the recursive call added, so this doesn't fully handle looping behavior I think
-        // That should happen after the map(f) call
-        let sketches: Vec<_> = candidates
+        let mut sketches: Vec<_> = candidates
             .into_iter()
+            .map(&f)
             .filter(|s| {
-                s.sketch.is_example_consistent(
-                    &holedata.examples,
+                s.sketch.symbolic_block_based_evaluator(
+                    examples,
                     state,
-                    holedata.get_nodeid(),
-                    (&self.sketch, examples),
+                    state.start_node,
+                    &s.sketch,
                 )
             })
-            .chain(deductive_candidates.into_iter())
-            .map(f)
             .collect();
+
+        sketches.extend(deductive_candidates.into_iter().map(f));
 
         info!(
             "New sketches with control flow: \n{}",
-            sketches
-                .iter()
-                .map(ToString::to_string)
-                .collect_vec()
-                .join("")
+            sketches.len() /* .iter()
+                           .map(ToString::to_string)
+                           .collect_vec()
+                           .join("") */
         );
 
         /* #[cfg(debug_assertions)] */
@@ -967,36 +1334,44 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
         self.holes.is_empty()
     }
 
-    pub fn create_rec_sketch(state: &SynthesizerState<T>, holedata: &HoleMetaData<T>) -> Self {
+    // Lets actually not synthesize a recursive sketch with holes
+    // That just makes things more tricky if we can avoid it
+    // We can just stick in blocks for each value from the bottom up enumeration
+    pub fn create_rec_sketch(state: &SynthesizerState<T>, holedata: &HoleMetaData<T>) -> Vec<Self> {
+        /* info!("Creating a recursive sketch"); */
         let sig = state.sig;
         assert!(sig.output.is_closed());
         let typ = sig.output.clone();
-        let sketch_args = sig.input.iter().map(|t| Sketch::Hole(t.clone())).collect();
 
-        // todo: one does want to add the requirement that one of these holes is strictly smaller.
-        let holes = sig
-            .input
-            .iter()
-            .enumerate()
-            .map(|(idx, t)| {
-                HoleMetaData::new(
-                    holedata.nodeid,
-                    // todo: This example thing probably doesn't work, possibly not the nodeid thing either
-                    holedata.examples.clone(),
-                    t.clone(),
-                    holedata.well_typed && sig.output.is_subtype(&holedata.typ),
-                )
-                .add_depth(idx.try_into().unwrap())
+        /* warn!("TODO: Should I be doing something with the holedata?"); */
+
+        // First argument should not be a hole but instead an observably smaller value
+        // So we skip the first value and put something concrete instead
+        assert!(sig.input.len() > 0); // Otherwise it shouldn't be recursible
+
+        // Want to iterate through the list of signature inputs
+        // And pass to the recursive function the first argument as a strictly smaller version of the original input
+        assert!(!state.sig.input[0].is_non_trivial()); // The next piece of code blows up without simple equalities
+        let possible_arg_one = state
+            .fragment_collection
+            .get_recursable_blocks(&state.sig.input[0]);
+        // And the rest as small blocks for arguments that are consistent with the examples if they exist
+        let other_args = state.sig.input.iter().skip(1).map(|ty| {
+            state
+                .fragment_collection
+                .get_small_traces(ty, 2.try_into().unwrap())
+        });
+
+        once(possible_arg_one)
+            .chain(other_args)
+            .multi_cartesian_product()
+            .map(|args| SketchWithData {
+                sketch: Sketch::Rec(typ.clone(), args.into_iter().map(|f| f.into()).collect()),
+                holes: MinHeap::new(),
             })
-            .collect();
-
-        SketchWithData {
-            sketch: Sketch::Rec(typ, sketch_args),
-            holes,
-        }
+            .collect()
     }
 
-    /* #[cfg(debug_assertions)] */
     /// For checking if all the holes are valid
     pub fn assert_valid_state(&self, ecta: &SynthEcta<T>, start_node: ECTANode) {
         let SketchWithData { sketch, mut holes } = self.clone();
@@ -1053,7 +1428,6 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
                             }
                             holes1.push(hole);
                         } else {
-                            assert!(recursion_allowed);
                             holes2.push(hole);
                         }
                         (holes1, holes2)
@@ -1074,28 +1448,10 @@ impl<'a, T: TypeSystemBounds + 'a> SketchWithData<T> {
             }
 
             Sketch::Rec(_, args) => {
-                let init = (0..args.len()).map(|_| MinHeap::new()).collect_vec();
+                assert!(args.len() > 0);
 
-                let acc = holes.into_iter().fold(init, |mut acc, h| {
-                    let HoleMetaData {
-                        mut path,
-                        recursion_allowed,
-                        ..
-                    } = h;
-                    assert!(!recursion_allowed);
-
-                    let dir = path.pop().unwrap();
-
-                    acc[dir as usize].push(HoleMetaData { path, ..h });
-
-                    acc
-                });
-
-                acc.into_iter()
-                    .zip(args.into_iter())
-                    .for_each(|(holes, arg)| {
-                        SketchWithData { sketch: arg, holes }.assert_valid_state(ecta, start_node)
-                    })
+                args.iter()
+                    .for_each(|a| assert!(!matches!(a, Sketch::Hole(_))));
             }
             Sketch::Operation(o, args) => {
                 let init_heaps = (0..args.len()).map(|_| MinHeap::new()).collect_vec();

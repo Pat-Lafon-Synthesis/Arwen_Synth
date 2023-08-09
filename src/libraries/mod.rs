@@ -1,9 +1,6 @@
 use std::rc::Rc;
 
-use arwen_synth::{
-    language::*,
-    types::{BaseType, Signature},
-};
+use crate::language::*;
 
 #[allow(dead_code)]
 pub fn bool_library() -> Vec<Operation<BaseType>> {
@@ -58,6 +55,12 @@ pub fn bool_library() -> Vec<Operation<BaseType>> {
             }),
         },
     ]
+}
+
+pub fn list_nat_library() -> Vec<Operation<BaseType>> {
+    let mut l = list_library();
+    l.extend(nat_library());
+    l
 }
 
 #[allow(dead_code)]

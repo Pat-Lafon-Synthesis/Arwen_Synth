@@ -7,15 +7,24 @@ use ecta_rs::{ECTANode, Edge};
 use itertools::Itertools;
 
 use crate::data_structures::SynthCostFunc;
-use crate::types::{Signature, TypeSystemBounds};
+use crate::language::{Signature, TypeSystemBounds};
 use crate::{SynthEcta, SynthEctaEdge};
 
 use super::TestCase;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Tree<T: Display> {
+pub enum Tree<T> {
     Leaf,
     Node(T, Box<Tree<T>>, Box<Tree<T>>),
+}
+
+impl<T> Tree<T> {
+    pub fn height(&self) -> usize {
+        match self {
+            Tree::Leaf => 0,
+            Tree::Node(_, t1, t2) => 1 + std::cmp::max(t1.height(), t2.height()),
+        }
+    }
 }
 
 impl<T: Display> Display for Tree<T> {
@@ -369,6 +378,16 @@ impl<T: TypeSystemBounds> LinearProgram<T> {
         }
     }
 
+    pub fn contains_named_variable(&self, name: &str) -> bool {
+        match &self.node {
+            LinearProgramNode::Variable(v) => v.name == name,
+            LinearProgramNode::Constant(_) => false,
+            LinearProgramNode::Operation(_) => {
+                self.args.iter().any(|a| a.contains_named_variable(name))
+            }
+        }
+    }
+
     pub fn interpret(&self, e: &Environment<T>) -> Result<Constant, InvalidProg> {
         let LinearProgram { node, args } = self;
         Ok(match node {
@@ -590,6 +609,19 @@ impl<T: TypeSystemBounds> Program<T> {
             ProgramNode::Rec(t) => t.clone(),
         }
     }
+
+    pub fn substitute(&self, env: &HashMap<String, LinearProgram<T>>) -> Self {
+        match self {
+            Program {
+                node: ProgramNode::Variable(v),
+                ..
+            } if env.get(&v.name).is_some() => env.get(&v.name).unwrap().clone().into(),
+            Program { node, args } => Program {
+                node: node.clone(),
+                args: args.iter().map(|a| a.substitute(env)).collect(),
+            },
+        }
+    }
 }
 
 impl<T: TypeSystemBounds> From<LinearProgram<T>> for Program<T> {
@@ -598,6 +630,17 @@ impl<T: TypeSystemBounds> From<LinearProgram<T>> for Program<T> {
             node: node.into(),
             args: args.into_iter().map(|a| a.into()).collect(),
         }
+    }
+}
+
+impl<T: TypeSystemBounds> TryFrom<Program<T>> for LinearProgram<T> {
+    type Error = ();
+
+    fn try_from(Program { node, args }: Program<T>) -> Result<Self, Self::Error> {
+        Ok(LinearProgram {
+            node: node.try_into()?,
+            args: args.into_iter().map(|a| a.try_into()).try_collect()?,
+        })
     }
 }
 

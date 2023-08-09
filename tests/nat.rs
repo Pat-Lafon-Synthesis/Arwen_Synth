@@ -2,8 +2,7 @@ use arwen_synth::language::Examples;
 use arwen_synth::{parser_interface::parse, synthesis};
 use std::{fs::File, io::Read};
 
-mod libraries;
-use libraries::nat_library;
+use arwen_synth::libraries::nat_library;
 
 macro_rules! make_test {
     ($test_name:tt, $($libs:tt)*) => {

@@ -1,9 +1,8 @@
 use std::rc::Rc;
 
 use arwen_synth::{
-    language::{Constant, Examples, InvalidProg, Operation, TestCase},
+    language::{BaseType, Constant, Examples, InvalidProg, Operation, Signature, TestCase},
     synthesis,
-    types::{BaseType, Signature},
 };
 
 pub fn main() {

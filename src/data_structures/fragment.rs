@@ -1,16 +1,15 @@
-use std::{collections::HashMap, fmt::Display, num::NonZeroU8, rc::Rc};
+use std::{collections::HashMap, fmt::Display, num::NonZeroU8};
 
 use itertools::Itertools;
 
 use crate::{
-    language::{Constant, Examples, LinearProgram, LinearProgramNode},
-    types::BaseType,
+    language::{Examples, LinearProgram, LinearProgramNode},
     Libraries, Operation, Signature, TestCase, TypeSystemBounds, Variable,
 };
 
 #[derive(Debug, Clone)]
 pub struct Fragment<T: TypeSystemBounds> {
-    size: NonZeroU8,
+    pub size: NonZeroU8,
     pub ty: T,
     pub fragment: LinearProgram<T>,
     pub behavior: Vec<TestCase>,
@@ -140,7 +139,7 @@ impl<T: TypeSystemBounds> FragmentCollection<T> {
     pub fn get_all_sorted(&self, ty: &T) -> Vec<&Fragment<T>> {
         self.inner
             .iter()
-            .filter(|f| &f.ty == ty)
+            .filter(|f| f.ty.equal_base_type(ty))
             .sorted_by_key(|f| f.size)
             .collect()
     }
@@ -243,7 +242,65 @@ impl<T: TypeSystemBounds> FragmentCollection<T> {
             })
             .collect()
     }
+
+    /// Assume that arg0 is of a recursible type
+    /// Find all components of size 2 that use arg0 to produce a strictly decreasing value
+    pub fn get_recursable_blocks<'a>(&'a self, recursable_ty: &'a T) -> Vec<Fragment<T>> {
+        // can recurse on this type
+        assert!(recursable_ty.is_recursable());
+
+        // Check that the variable exists and is of the expected type
+        assert!(self
+            .inner
+            .iter()
+            .find(|f| match f {
+                Fragment {
+                    fragment:
+                        LinearProgram {
+                            node: LinearProgramNode::Variable(Variable { name, ty }),
+                            ..
+                        },
+                    ..
+                } if name == "arg0" => {
+                    assert!(recursable_ty.equal_base_type(ty));
+                    true
+                }
+                _ => false,
+            })
+            .is_some());
+
+        // Find all components of size 2
+        // That contain arg0
+        // And their output is strictly decreasing
+        self.inner
+            .iter()
+            .filter(|f| u8::from(f.size) == 2)
+            .filter(move |f| f.ty.equal_base_type(&recursable_ty))
+            .filter(|f| f.fragment.contains_named_variable("arg0"))
+            .filter(|f| {
+                f.behavior
+                    .iter()
+                    .all(|TestCase { inputs, output }| &inputs[0] > output)
+            })
+            .cloned()
+            .collect()
+    }
+
+    // Get all traces that match the same base type and are smaller than or equal to n
+    pub fn get_small_traces(&self, ty: &T, n: NonZeroU8) -> Vec<Fragment<T>> {
+        self.inner
+            .iter()
+            .filter(|f| f.size <= n)
+            .filter(|f| f.ty.equal_base_type(&ty))
+            .cloned()
+            .collect()
+    }
 }
+
+#[cfg(test)]
+use crate::language::{BaseType, Constant};
+#[cfg(test)]
+use std::rc::Rc;
 
 #[test]
 fn test_fragment_collection() {

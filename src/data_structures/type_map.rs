@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     language::Operation,
-    types::{BaseType, TypeSystemBounds},
+    language::{BaseType, TypeSystemBounds},
 };
 
 pub struct TypeMap<T: TypeSystemBounds> {

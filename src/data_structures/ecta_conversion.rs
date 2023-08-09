@@ -2,10 +2,8 @@ use ecta_rs::{ECTANode, Node, ECTA};
 use log::{info, warn};
 
 use crate::{
-    language::{LinearProgram, LinearProgramNode},
-    transpose,
-    types::TypeSystemBounds,
-    SynthEctaEdge,
+    language::{LinearProgram, LinearProgramNode, TypeSystemBounds},
+    transpose, SynthEctaEdge,
 };
 
 pub fn create_ecta_from_traces<T: TypeSystemBounds>(

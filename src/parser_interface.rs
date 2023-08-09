@@ -4,10 +4,7 @@ use program_synthesis_parser::lang::{
     ActualExp, ActualType, Example, Exp, Problem, SynthProblem, Type,
 };
 
-use crate::{
-    language::{Constant, TestCase},
-    types::{BaseType, Signature, TypeSystemBounds},
-};
+use crate::language::{BaseType, Constant, Signature, TestCase, TypeSystemBounds};
 
 pub fn parse(src: String) -> MySynthProblem<BaseType> {
     let parser = program_synthesis_parser::spec::ProblemParser::new();

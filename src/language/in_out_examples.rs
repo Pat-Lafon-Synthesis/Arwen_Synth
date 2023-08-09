@@ -3,9 +3,9 @@ use std::fmt::{Debug, Display};
 use itertools::Itertools;
 use log::info;
 
-use crate::{data_structures::InverseMap, types::TypeSystemBounds};
+use crate::data_structures::InverseMap;
 
-use super::{Constant, LinearProgram, Operation, Program};
+use super::{Constant, LinearProgram, Operation, Program, TypeSystemBounds};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
 pub struct TestCase {
@@ -30,6 +30,7 @@ pub struct Examples {
     negative_examples: Vec<TestCase>,
 }
 
+/// helper function
 fn filter_behavior<T: TypeSystemBounds, P: Fn(&Constant) -> bool>(
     iter: Vec<TestCase>,
     cond: &LinearProgram<T>,
@@ -49,6 +50,7 @@ fn filter_behavior<T: TypeSystemBounds, P: Fn(&Constant) -> bool>(
         .collect::<Vec<TestCase>>()
 }
 
+/// helper function
 fn filter_behavior_p<T: TypeSystemBounds, P: Fn(&Constant) -> bool>(
     iter: Vec<TestCase>,
     cond: &Program<T>,
@@ -74,6 +76,10 @@ impl Examples {
             positive_examples,
             negative_examples,
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.positive_examples.is_empty() && self.negative_examples.is_empty()
     }
 
     pub fn extend(&mut self, other: Examples) {
@@ -137,6 +143,17 @@ impl Examples {
             .collect()
     }
 
+    pub fn propogate_operation_examples<T: TypeSystemBounds>(
+        &self,
+        o: &Operation<T>,
+        inverse_map: &InverseMap<T>,
+    ) -> Option<Vec<Vec<Examples>>> {
+        (0..o.sig.input.len())
+            .map(|idx| inverse_map.inverse_app(o, self, idx))
+            .collect::<Option<_>>()
+            .map(|i: Vec<_>| i.into_iter().multi_cartesian_product().collect())
+    }
+
     /// Helper for getting a set of examples for the arguments to a recursive function.
     /// Does not translate over any negative examples
     pub fn rec_compute_example_args(&self, num_args: usize) -> Vec<Examples> {
@@ -196,4 +213,9 @@ impl Display for Examples {
                 .join(", ")
         )
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Union {
+    universe: Vec<Examples>,
 }

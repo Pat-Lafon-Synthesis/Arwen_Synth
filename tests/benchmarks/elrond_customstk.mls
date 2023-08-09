@@ -1,0 +1,5 @@
+synth list -> list -> list satisfying
+
+[Nil,Nil] -> Nil,
+[Nil, Cons(2, Nil)] -> Cons(2, Nil)
+[Cons(1,Cons(0,Nil)),Cons(4,Nil)] -> Cons(1,Cons(0,Cons(4,Nil))),

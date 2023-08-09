@@ -1,0 +1,6 @@
+---
+source: tests/list.rs
+assertion_line: 30
+expression: prog.unwrap()
+---
+if (is_nil(arg1)) {arg0} else {cons(hd(arg0),cons(hd(arg1),tail(arg0)))}

@@ -3,8 +3,8 @@ use std::{fs::File, io::Read};
 use arwen_synth::language::Examples;
 use arwen_synth::{parser_interface::parse, synthesis};
 
-mod libraries;
-use libraries::bool_library;
+
+use arwen_synth::libraries::bool_library;
 
 macro_rules! make_test {
     ($test_name:tt, $($libs:tt)*) => {

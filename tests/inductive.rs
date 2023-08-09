@@ -1,15 +1,12 @@
 use arwen_synth::{
-    language::{Constant, Examples, TestCase},
+    language::{BaseType, Constant, Examples, Signature, TestCase},
+    libraries::*,
     synthesis,
-    types::BaseType,
 };
-
-mod libraries;
-use libraries::*;
 
 #[test]
 fn inductive_synthesis_negation() {
-    let sig = arwen_synth::types::Signature {
+    let sig = Signature {
         input: vec![BaseType::Bool],
         output: BaseType::Bool,
     };

@@ -62,7 +62,7 @@ impl<T: TypeSystemBounds> InverseMap<T> {
         hole: &Examples,
         idx: usize,
     ) -> Option<Vec<Examples>> {
-        info!("Computing inverse app for {o}");
+        /* info!("Computing inverse app for {o}"); */
         // Get all the inverse semantics for the operation
         let inverse_semantics = self.map.get(o).unwrap();
 
@@ -87,7 +87,7 @@ impl<T: TypeSystemBounds> InverseMap<T> {
 
         // If any of these didn't work out, then we don't have inverse semantics for one of the fuction arguments
         if t_iter.clone().any(|i| i.is_empty()) {
-            info!("Inverse app is empty for {o}, {hole}");
+            /* info!("Inverse app is empty for {o}, {hole}"); */
             return None;
         }
 
